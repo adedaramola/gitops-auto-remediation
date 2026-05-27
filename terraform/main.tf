@@ -45,7 +45,8 @@ module "eks" {
   cluster_encryption_config = {}
 
   cluster_enabled_log_types              = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
-  cloudwatch_log_group_retention_in_days = var.log_retention_days
+  cloudwatch_log_group_retention_in_days = var.audit_log_retention_days
+  cloudwatch_log_group_kms_key_id        = local.kms_log_key_arn
 
   eks_managed_node_groups = {
     default = {
@@ -89,6 +90,7 @@ module "log_shipping" {
   oidc_provider_arn  = module.eks.oidc_provider_arn
   oidc_provider      = replace(module.eks.cluster_oidc_issuer_url, "https://", "")
   log_retention_days = var.log_retention_days
+  kms_key_arn        = local.kms_log_key_arn
 }
 
 module "gatekeeper" {
@@ -211,6 +213,7 @@ module "sentinel_pipeline" {
   agent_lambda_arn       = module.decision_engine_lambda.lambda_arn
   sfn_role_arn           = module.iam.sfn_role_arn
   log_retention_days     = var.log_retention_days
+  kms_key_arn            = local.kms_log_key_arn
 }
 
 ########################
@@ -264,6 +267,7 @@ module "webhook" {
   bundler_lambda_arn  = module.signal_collector_lambda.lambda_arn
   bundler_lambda_name = module.signal_collector_lambda.lambda_name
   log_retention_days  = var.log_retention_days
+  kms_key_arn         = local.kms_log_key_arn
 }
 
 output "webhook_url" {
@@ -299,6 +303,7 @@ resource "aws_cloudwatch_log_group" "lambda_logs" {
   for_each          = toset(local.lambda_function_names)
   name              = "/aws/lambda/${each.value}"
   retention_in_days = var.log_retention_days
+  kms_key_id        = local.kms_log_key_arn
 
   tags = { Project = local.name }
 }

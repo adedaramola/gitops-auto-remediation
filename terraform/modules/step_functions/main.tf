@@ -9,10 +9,15 @@ variable "log_retention_days" {
   type    = number
   default = 30
 }
+variable "kms_key_arn" {
+  type    = string
+  default = null
+}
 
 resource "aws_cloudwatch_log_group" "sfn" {
   name              = "/aws/vendedlogs/states/${var.project_name}-multi-agent-pipeline"
   retention_in_days = var.log_retention_days
+  kms_key_id        = var.kms_key_arn
   tags              = { Project = var.project_name }
 }
 

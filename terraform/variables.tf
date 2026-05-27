@@ -4,8 +4,21 @@ variable "aws_region" {
 }
 
 variable "log_retention_days" {
-  type    = number
-  default = 30
+  type        = number
+  default     = 30
+  description = "Retention in days for runtime log groups (Lambda, API GW, SFN, pod logs)."
+}
+
+variable "audit_log_retention_days" {
+  type        = number
+  default     = 180
+  description = "Retention in days for security/audit log groups (EKS control-plane audit, DynamoDB audit table indirectly)."
+}
+
+variable "enable_log_encryption" {
+  type        = bool
+  default     = false
+  description = "When true, creates a KMS key and encrypts all managed CloudWatch log groups. Adds ~$1/month for the key."
 }
 
 variable "alarm_actions" {
