@@ -425,11 +425,16 @@ The `notify-action-dispatched.yaml` workflow bridges GitHub (where the PR merge 
 
 ## Observability
 
-- **CloudWatch Logs** — all Lambda functions log structured JSON (`{"event": "...", "incident_id": "..."}`)
+- **CloudWatch Logs** — all Lambda functions emit structured JSON with a standardized schema. Always-present fields: `timestamp` (ISO-8601 UTC), `level`, `component`, `msg`, `request_id`, `trace_id`. Caller-supplied fields: `incident_id`, `service`, `env`, `alertname`, `execution_arn`. Example: `{"timestamp":"2026-05-27T14:03:11.482Z","level":"INFO","component":"signal_collector","msg":"incident_received","request_id":"abc-123","trace_id":"Root=1-...","incident_id":"inc-..."}`
+- **Step Functions execution logs** — ALL-level execution events (state transitions, input/output) written to `/aws/vendedlogs/states/gitops-sentinel-multi-agent-pipeline` with 30-day retention
+- **API Gateway access logs** — structured JSON per request (method, route, status, integration latency, error) in `/aws/apigateway/gitops-sentinel-webhook`
+- **EKS control-plane logs** — api, audit, authenticator, controllerManager, scheduler all enabled with 180-day retention (security tier)
+- **Pod logs** — `aws-for-fluent-bit` DaemonSet ships stdout/stderr from all namespaces to `/aws/eks/<cluster>/pod-logs`; pods annotated with `gitops.sentinel/incident-id` so logs are joinable on `incident_id`
 - **X-Ray tracing** — enabled on all Lambda functions; trace the full execution path in the AWS Console
 - **DynamoDB Audit Log** — `gitops-sentinel-decision-audit` table; every decision stored with 90-day TTL
 - **EventBridge DLQ** — failed EventBridge deliveries land in an SQS dead letter queue (`gitops-sentinel-eventbridge-dlq`) with 14-day retention
-- **Step Functions console** — visual execution graph for the multi-agent pipeline
+- **Alerting** — CloudWatch metric filters on `webhook_auth_failed`, `dedup_write_failed`, `audit_write_failed`, `auto_revert_failed`, Lambda ERROR count, and EventBridge DLQ depth; wire `var.alarm_actions` to an SNS topic to receive pages
+- **Grafana** — pipeline-health dashboard (incidents, dedup, PRs, outcomes, confidence routing, Lambda errors, SFN failures, DLQ depth) auto-provisioned via ConfigMap; CloudWatch datasource with IRSA for cross-pillar pivot
 
 ---
 
