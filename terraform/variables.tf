@@ -21,6 +21,16 @@ variable "enable_log_encryption" {
   description = "When true, creates a KMS key and encrypts all managed CloudWatch log groups. Adds ~$1/month for the key."
 }
 
+variable "environment" {
+  type        = string
+  default     = "Dev"
+  description = "Deployment environment. One of: Dev, Stage, Prod."
+  validation {
+    condition     = contains(["Dev", "Stage", "Prod"], var.environment)
+    error_message = "environment must be Dev, Stage, or Prod."
+  }
+}
+
 variable "alarm_actions" {
   type        = list(string)
   default     = []
