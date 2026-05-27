@@ -8,6 +8,12 @@ variable "log_retention_days" {
   default = 30
 }
 
+variable "alarm_actions" {
+  type        = list(string)
+  default     = []
+  description = "SNS topic ARNs to notify when a pipeline alarm fires. Leave empty to create alarms without notification."
+}
+
 variable "project_name" {
   type    = string
   default = "ai-gitops-Self-Healing"

@@ -78,6 +78,7 @@ module "observability" {
   oidc_provider     = replace(module.eks.cluster_oidc_issuer_url, "https://", "")
   webhook_url       = var.enable_api_gateway ? module.webhook[0].webhook_url : ""
   webhook_secret    = var.webhook_secret
+  alarm_actions     = var.alarm_actions
 }
 
 module "log_shipping" {
