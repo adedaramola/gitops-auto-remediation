@@ -150,7 +150,7 @@ _REMEDIATION_SCHEMA = """{
 
 
 def handler(event, context):
-    _init_log_context(context)
+    _init_log_context(context, incident_id=event.get("incident_id"))
     s3_bucket   = event["s3_bucket"]
     s3_key      = event["s3_key"]
     incident_id = event.get("incident_id", "unknown")

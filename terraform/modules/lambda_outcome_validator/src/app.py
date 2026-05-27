@@ -304,6 +304,8 @@ def handler(event, context):
     detail = event.get("detail", {}) if isinstance(event, dict) else {}
     incident_id = _extract_incident_id(detail)
     service = detail.get("service", "unknown")
+    _REQUEST_CONTEXT["incident_id"] = incident_id
+    _REQUEST_CONTEXT["service"] = service
     _log("info", "validator_started", incident_id=incident_id, service=service)
 
     err = _prom_query(f'sum(rate(http_requests_total{{service="{service}",status=~"5.."}}[5m]))')

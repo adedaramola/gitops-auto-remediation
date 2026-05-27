@@ -313,8 +313,20 @@ def _patch_replicas_kustomize(kustomize_text: str, new_replicas: int) -> str:
     return yaml.dump(doc, default_flow_style=False)
 
 
-def _patch_image_deployment(deploy_yaml: str, new_tag: str) -> str:
-    """Parse the deployment YAML and replace the first container's image tag."""
+def _annotate_pod_template(doc: dict, key: str, value: str) -> None:
+    """Set spec.template.metadata.annotations[key] = value in-place."""
+    if not value:
+        return
+    (doc.setdefault("spec", {})
+        .setdefault("template", {})
+        .setdefault("metadata", {})
+        .setdefault("annotations", {})
+        [key]) = value
+
+
+def _patch_image_deployment(deploy_yaml: str, new_tag: str, incident_id: str = "") -> str:
+    """Parse the deployment YAML, replace the first container's image tag,
+    and annotate the pod template with the incident id for log correlation."""
     doc = yaml.safe_load(deploy_yaml)
     try:
         containers = doc["spec"]["template"]["spec"]["containers"]
@@ -323,6 +335,7 @@ def _patch_image_deployment(deploy_yaml: str, new_tag: str) -> str:
             containers[0]["image"] = f"{base}:{new_tag}"
     except (KeyError, IndexError, TypeError):
         pass  # no image found; return unchanged
+    _annotate_pod_template(doc, "gitops.sentinel/incident-id", incident_id)
     return yaml.dump(doc, default_flow_style=False)
 
 
@@ -336,6 +349,7 @@ def handler(event, context):
 
     bundle = json.loads(s3.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8"))
     incident_id = bundle["incident_id"]
+    _REQUEST_CONTEXT["incident_id"] = incident_id
     _log("info", "agent_started", incident_id=incident_id)
 
     token = _get_github_token()
@@ -407,7 +421,7 @@ Revert this PR.
         deploy_path = f"gitops/apps/{service}/base/deployment.yaml"
         file_obj = _get_file(GITHUB_OWNER, GITHUB_REPO, deploy_path, base_branch, token)
         original = base64.b64decode(file_obj["content"]).decode("utf-8")
-        patched = _patch_image_deployment(original, tag).encode("utf-8")
+        patched = _patch_image_deployment(original, tag, incident_id).encode("utf-8")
         _put_file(GITHUB_OWNER, GITHUB_REPO, deploy_path,
                   f"{incident_id}: rollback image", patched, file_obj["sha"], branch, token)
         changes.append(deploy_path)
@@ -427,6 +441,7 @@ Revert this PR.
                 limits["memory"] = mem_target
             if cpu_target:
                 limits["cpu"] = cpu_target
+        _annotate_pod_template(doc, "gitops.sentinel/incident-id", incident_id)
         patched = yaml.dump(doc, default_flow_style=False).encode("utf-8")
         _put_file(GITHUB_OWNER, GITHUB_REPO, deploy_path,
                   f"{incident_id}: tune resources", patched, file_obj["sha"], branch, token)
@@ -438,11 +453,8 @@ Revert this PR.
         original = base64.b64decode(file_obj["content"]).decode("utf-8")
         stamp = str(int(time.time()))
         doc = yaml.safe_load(original)
-        (doc.setdefault("spec", {})
-            .setdefault("template", {})
-            .setdefault("metadata", {})
-            .setdefault("annotations", {})
-            ["gitops.sentinel/restartedAt"]) = stamp
+        _annotate_pod_template(doc, "gitops.sentinel/restartedAt", stamp)
+        _annotate_pod_template(doc, "gitops.sentinel/incident-id", incident_id)
         patched = yaml.dump(doc, default_flow_style=False).encode("utf-8")
         _put_file(GITHUB_OWNER, GITHUB_REPO, deploy_path,
                   f"{incident_id}: restart rollout", patched,

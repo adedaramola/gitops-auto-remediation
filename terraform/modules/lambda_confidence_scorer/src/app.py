@@ -151,7 +151,7 @@ def _recommend(confidence_score: int, risk_level: str) -> str:
 
 
 def handler(event, context):
-    _init_log_context(context)
+    _init_log_context(context, incident_id=event.get("incident_id"))
     incident_id  = event.get("incident_id", "unknown")
     triage       = event.get("triage", {})
     diagnosis    = event.get("diagnosis", {})

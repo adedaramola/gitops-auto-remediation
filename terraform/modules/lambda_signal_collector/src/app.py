@@ -203,6 +203,7 @@ def handler(event, context):
             return {"statusCode": 401, "body": json.dumps({"error": "unauthorized"})}
 
     incident_id = f"inc-{_now()}-{context.aws_request_id[:8]}"
+    _REQUEST_CONTEXT["incident_id"] = incident_id
     _log("info", "incident_received", incident_id=incident_id)
 
     raw = event
