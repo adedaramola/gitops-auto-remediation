@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 
 import boto3
 import botocore.session
@@ -14,16 +15,46 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 # ── Structured JSON logger ────────────────────────────────────────────────────
+COMPONENT = "signal_collector"
+
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
 if not LOG.handlers:
     _h = logging.StreamHandler()
     _h.setFormatter(logging.Formatter("%(message)s"))
     LOG.addHandler(_h)
+    LOG.propagate = False
+
+_REQUEST_CONTEXT: dict = {}
+
+
+def _init_log_context(lambda_context=None, **extra):
+    """Seed per-invocation log fields. Call once at the top of each handler."""
+    _REQUEST_CONTEXT.clear()
+    if lambda_context is not None:
+        rid = getattr(lambda_context, "aws_request_id", None)
+        if rid:
+            _REQUEST_CONTEXT["request_id"] = rid
+    trace_header = os.environ.get("_X_AMZN_TRACE_ID", "")
+    for part in trace_header.split(";"):
+        if part.startswith("Root="):
+            _REQUEST_CONTEXT["trace_id"] = part[5:]
+            break
+    for k, v in extra.items():
+        if v is not None:
+            _REQUEST_CONTEXT[k] = v
 
 
 def _log(level: str, msg: str, **ctx):
-    LOG.log(getattr(logging, level.upper()), json.dumps({"level": level.upper(), "msg": msg, **ctx}))
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        "level": level.upper(),
+        "component": COMPONENT,
+        "msg": msg,
+        **_REQUEST_CONTEXT,
+        **ctx,
+    }
+    LOG.log(getattr(logging, level.upper()), json.dumps(record, default=str))
 
 
 # ── HTTP session with retries ─────────────────────────────────────────────────
@@ -163,6 +194,7 @@ def _k8s_get(endpoint: str, token: str, path: str, ca_path: str):
 
 
 def handler(event, context):
+    _init_log_context(context)
     # ── Webhook secret validation ─────────────────────────────────────────────
     if WEBHOOK_SECRET:
         incoming = (event.get("headers") or {}).get("x-webhook-secret", "")

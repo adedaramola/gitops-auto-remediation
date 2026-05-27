@@ -12,6 +12,7 @@ Results stored under $.diagnosis in the Step Functions state object.
 import json
 import logging
 import os
+from datetime import datetime, timezone
 
 import boto3
 import requests
@@ -19,16 +20,46 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 # ── Logger ────────────────────────────────────────────────────────────────────
+COMPONENT = "root_cause_agent"
+
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
 if not LOG.handlers:
     _h = logging.StreamHandler()
     _h.setFormatter(logging.Formatter("%(message)s"))
     LOG.addHandler(_h)
+    LOG.propagate = False
+
+_REQUEST_CONTEXT: dict = {}
+
+
+def _init_log_context(lambda_context=None, **extra):
+    """Seed per-invocation log fields. Call once at the top of each handler."""
+    _REQUEST_CONTEXT.clear()
+    if lambda_context is not None:
+        rid = getattr(lambda_context, "aws_request_id", None)
+        if rid:
+            _REQUEST_CONTEXT["request_id"] = rid
+    trace_header = os.environ.get("_X_AMZN_TRACE_ID", "")
+    for part in trace_header.split(";"):
+        if part.startswith("Root="):
+            _REQUEST_CONTEXT["trace_id"] = part[5:]
+            break
+    for k, v in extra.items():
+        if v is not None:
+            _REQUEST_CONTEXT[k] = v
 
 
 def _log(level: str, msg: str, **ctx):
-    LOG.log(getattr(logging, level.upper()), json.dumps({"level": level.upper(), "msg": msg, **ctx}))
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        "level": level.upper(),
+        "component": COMPONENT,
+        "msg": msg,
+        **_REQUEST_CONTEXT,
+        **ctx,
+    }
+    LOG.log(getattr(logging, level.upper()), json.dumps(record, default=str))
 
 
 # ── HTTP session ──────────────────────────────────────────────────────────────
@@ -102,6 +133,7 @@ def _heuristic_diagnosis(bundle: dict, triage: dict) -> dict:
 
 
 def handler(event, context):
+    _init_log_context(context)
     s3_bucket   = event["s3_bucket"]
     s3_key      = event["s3_key"]
     incident_id = event.get("incident_id", "unknown")
