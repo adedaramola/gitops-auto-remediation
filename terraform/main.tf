@@ -70,8 +70,14 @@ module "argocd" {
 }
 
 module "observability" {
-  source       = "./modules/observability"
-  project_name = local.name
+  source            = "./modules/observability"
+  project_name      = local.name
+  cluster_name      = var.cluster_name
+  aws_region        = var.aws_region
+  oidc_provider_arn = module.eks.oidc_provider_arn
+  oidc_provider     = replace(module.eks.cluster_oidc_issuer_url, "https://", "")
+  webhook_url       = var.enable_api_gateway ? module.webhook[0].webhook_url : ""
+  webhook_secret    = var.webhook_secret
 }
 
 module "log_shipping" {

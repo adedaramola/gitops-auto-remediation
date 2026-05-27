@@ -156,6 +156,20 @@ class TestWebhookSecretValidation(unittest.TestCase):
         resp = app.handler(event, _make_context())
         self.assertEqual(resp["statusCode"], 200)
 
+    def test_bearer_token_passes(self):
+        app.WEBHOOK_SECRET = "correct-secret"
+        event = _alertmanager_event()
+        event["headers"] = {"authorization": "Bearer correct-secret"}
+        resp = app.handler(event, _make_context())
+        self.assertEqual(resp["statusCode"], 200)
+
+    def test_bearer_token_wrong_returns_401(self):
+        app.WEBHOOK_SECRET = "correct-secret"
+        event = _alertmanager_event()
+        event["headers"] = {"authorization": "Bearer wrong"}
+        resp = app.handler(event, _make_context())
+        self.assertEqual(resp["statusCode"], 401)
+
 
 class TestHandlerDedup(unittest.TestCase):
     def test_dedup_suppressed_returns_202(self):

@@ -193,11 +193,23 @@ def _k8s_get(endpoint: str, token: str, path: str, ca_path: str):
     return r.json()
 
 
+def _extract_webhook_secret(headers: dict) -> str:
+    """Return the secret from x-webhook-secret or Authorization: Bearer <token>."""
+    if not headers:
+        return ""
+    if direct := headers.get("x-webhook-secret"):
+        return direct
+    auth = headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:]
+    return ""
+
+
 def handler(event, context):
     _init_log_context(context)
     # ── Webhook secret validation ─────────────────────────────────────────────
     if WEBHOOK_SECRET:
-        incoming = (event.get("headers") or {}).get("x-webhook-secret", "")
+        incoming = _extract_webhook_secret(event.get("headers") or {})
         if not hmac.compare_digest(incoming, WEBHOOK_SECRET):
             _log("warning", "webhook_auth_failed")
             return {"statusCode": 401, "body": json.dumps({"error": "unauthorized"})}
