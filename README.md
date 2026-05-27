@@ -1,28 +1,66 @@
 # GitOps Sentinel
 
-> **Confidence-gated autonomous remediation for Kubernetes — no human in the loop unless the system isn't sure.**
-
-GitOps Sentinel is a production-grade AIOps platform that intercepts infrastructure anomalies, routes them through a multi-agent reasoning pipeline, and takes action only when confidence justifies it. Every remediation is a Git commit — the cluster never changes outside of a reviewed pull request or a high-confidence auto-apply.
+> Autonomous Kubernetes remediation — AI reasons about your incidents, Git owns every change, and humans only get paged when the system isn't sure.
 
 ---
 
-## Why GitOps Sentinel?
+## Why This Matters
 
-Traditional alerting pipelines page humans for every incident. GitOps Sentinel asks: *what if the system could reason about the incident itself and decide whether a human is needed?*
+On-call engineers get paged for everything — including incidents the system already knows how to fix. A pod OOMKills at 3 AM and someone wakes up to run `kubectl rollout restart`. A deployment drifts from the desired replica count and a Slack notification fires into a channel no one is watching.
 
-The answer is a **confidence-gated routing engine**:
+The cost isn't just sleep. It's the cognitive overhead of triaging incidents that are routine, well-understood, and fixable in seconds by anyone who's seen them before.
 
-| Confidence | Risk level | Action |
-|---|---|---|
-| ≥ 80 | low | Auto-apply: merge the PR automatically |
-| 40 – 79 | any | Open PR: engineer reviews before merge |
-| < 40 | any | Escalate: page on-call, no automated change |
+GitOps Sentinel asks a different question: **what if the system could decide whether a human is actually needed?**
 
-This means routine, well-understood incidents (pod OOMKilled, replica drift, known bad image tag) resolve in seconds. Novel, high-risk situations escalate immediately — before anything touches the cluster.
+---
+
+## What It Does
+
+GitOps Sentinel is a confidence-gated remediation pipeline for Kubernetes. When an alert fires, it doesn't just notify — it reasons, proposes a fix, scores its own confidence, and acts accordingly.
+
+| Confidence | Action |
+|---|---|
+| ≥ 80 + low risk | Auto-apply: the PR is opened and merged automatically |
+| 40 – 79 | Open PR: a human reviews before anything touches the cluster |
+| < 40 | Escalate: page on-call, no automated change |
+
+Every remediation is a Git commit. The cluster never changes outside of a pull request or a high-confidence auto-apply — Argo CD syncs the rest. If the fix makes things worse, the system detects it and opens a revert PR automatically.
+
+---
+
+## What It Can Handle
+
+**Incident types**
+- Pod OOMKilled / crash-looping
+- Deployment replica drift
+- High HTTP error rate (5xx spike)
+- Resource exhaustion (CPU/memory pressure)
+- Bad image tag rollouts
+
+**Remediation actions** (defined in `allowed-actions.yaml` — the LLM must choose from this list)
+- `rollback_deployment` — revert to the last known-good image tag
+- `scale_replicas` — adjust replica count within policy bounds
+- `tune_resources` — update CPU/memory requests and limits
+- `restart_pod` — targeted pod restart without full rollout
+
+**Operational guarantees**
+- Deduplicates alert storms: a 30-minute dedup window prevents the same incident from triggering multiple pipelines
+- Validates every remediation: Prometheus health check 5 minutes post-merge; auto-reverts on failure
+- Full audit trail: every decision, confidence score, and outcome written to DynamoDB (90-day retention)
+- Two LLM providers supported: AWS Bedrock (Claude 3 Haiku) and OpenAI GPT-4 — switchable via config
+- Two execution paths: a fast single-agent path for cost-sensitive environments and a full multi-agent pipeline for higher-quality decisions
 
 ---
 
 ## Architecture
+
+At its core, GitOps Sentinel is a signal-to-action pipeline with a confidence gate in the middle:
+
+```
+Alert fires → Signal collected → AI pipeline → Confidence gate → Git commit → Cluster sync → Outcome check
+```
+
+In full:
 
 ```
 Alertmanager / CloudWatch
@@ -32,7 +70,7 @@ Alertmanager / CloudWatch
         │
         ▼
   Signal Collector Lambda          ◄── dedup via DynamoDB conditional write
-        │  emits: SignalBundled / SentinelPipelineTriggered
+        │  enriches: Prometheus metrics + k8s events → S3 bundle
         ▼
   EventBridge (custom bus + 7-day archive)
         │
@@ -40,10 +78,10 @@ Alertmanager / CloudWatch
         │
         └──► Step Functions: Sentinel Pipeline  (multi-agent path, feature-flag on)
                 │
-                ├── Classifier Agent     → severity class, blast radius, priority
+                ├── Classifier Agent     → severity, blast radius, incident type
                 ├── Root Cause Agent     → root cause, contributing factors, confidence
-                ├── Action Planner Agent → action from allowed-actions.yaml, alternatives
-                ├── Confidence Scorer    → deterministic score, route decision
+                ├── Action Planner       → action from allowed-actions.yaml + alternatives
+                ├── Confidence Scorer    → deterministic score (no LLM), route decision
                 └── RouteByConfidence ──► auto_apply | open_pr | escalate
                                               │
                                               ▼
@@ -56,55 +94,28 @@ Alertmanager / CloudWatch
                               Outcome Validator Lambda
                                     (Prometheus health check)
                                               │
-                                    emits: OutcomeValidated / OutcomeFailed
-                                              │
                                     ► auto-revert PR if OutcomeFailed
 ```
 
 ---
 
-## Components
+## How It Works
 
-### Lambda Functions
+1. **Alert intake** — Alertmanager fires a signed webhook to API Gateway. HMAC validation rejects anything unsigned.
 
-| Function | Role |
-|---|---|
-| `signal_collector` | Ingests Alertmanager webhooks, deduplicates via DynamoDB, bundles signal context (Prometheus metrics + k8s events) into S3, emits to EventBridge |
-| `decision_engine` | Single-agent coordinator: reads the signal bundle, queries the LLM for a remediation plan, opens a GitHub PR |
-| `outcome_validator` | Post-remediation health check: queries Prometheus, emits `OutcomeValidated` or `OutcomeFailed`, triggers auto-revert if needed |
-| `classifier_agent` | Multi-agent: classifies severity, incident type, blast radius |
-| `root_cause_agent` | Multi-agent: LLM root cause analysis with diagnosis confidence score |
-| `action_planner` | Multi-agent: proposes action from `allowed-actions.yaml`, with alternatives |
-| `confidence_scorer` | Multi-agent: pure deterministic scoring — no LLM, no latency, no cost |
+2. **Signal collection** — Signal Collector Lambda checks DynamoDB for a duplicate (same service + alert within 30 minutes). If new, it fetches Prometheus metrics and Kubernetes events, stores the enriched bundle in S3, and emits an event to EventBridge.
 
-### Infrastructure Modules
+3. **Agent pipeline** — Behaviour is controlled by the `enable_multi_agent` flag:
+   - **Single-agent** (`false`, default): Decision Engine reads the bundle, calls the LLM once, opens a GitHub PR. No confidence scoring. Designed for demos and cost-sensitive environments.
+   - **Multi-agent** (`true`): Step Functions runs the full pipeline — Classifier → Root Cause → Action Planner → Confidence Scorer → RouteByConfidence.
 
-| Module | Purpose |
-|---|---|
-| `eventbridge` | Custom event bus + 7-day archive for replay |
-| `eventbridge_rules` | Rules with DLQ, retry policies, and dead-letter config |
-| `step_functions` | Sentinel Pipeline state machine (Standard Workflow) |
-| `dynamodb_incidents` | Dedup table + audit trail (TTL-based) |
-| `s3_incidents` | Signal bundle storage |
-| `apigw_webhook` | HTTP API Gateway → Signal Collector |
-| `iam` | Per-function scoped roles, X-Ray permissions |
-| `argocd` | GitOps controller (Helm) |
-| `observability` | Prometheus + Grafana (Helm) |
-| `gatekeeper` | OPA policy enforcement (Helm) |
+4. **Confidence routing** — The Confidence Scorer produces a deterministic score (no LLM call, no latency) by starting from the diagnosis confidence and applying penalties for severity, blast radius, and action risk type. The score determines the route: auto-apply, open PR for review, or escalate to on-call.
 
----
+5. **GitOps write** — The Decision Engine opens a PR against the GitOps repo targeting `gitops/apps/{service}/{deployment.yaml}`. High-confidence PRs are auto-merged via the GitHub API.
 
-## Signal Flow
+6. **Cluster sync** — Argo CD detects the merged commit and applies the change to the cluster. The cluster never changes outside of Git.
 
-1. **Alertmanager** fires a webhook → API Gateway validates HMAC secret
-2. **Signal Collector** deduplicates (DynamoDB conditional write), enriches with Prometheus metrics and k8s events, stores bundle in S3, emits `SignalBundled` or `SentinelPipelineTriggered` to EventBridge
-3. **Agent pipeline** (behaviour depends on `enable_multi_agent` flag):
-   - **Single-agent** (default, `enable_multi_agent = false`): Decision Engine Lambda reads the bundle, queries the LLM, opens a GitHub PR. No confidence scoring.
-   - **Multi-agent** (`enable_multi_agent = true`): Step Functions pipeline runs Classifier → Root Cause → Action Planner → Confidence Scorer → RouteByConfidence
-4. **GitHub PR** is opened (or auto-merged) with the proposed change to the GitOps manifest
-5. **Argo CD** detects the merged commit and syncs the cluster
-6. **Outcome Validator** queries Prometheus 5 minutes post-remediation and emits the outcome event
-7. If validation fails, the validator opens a **revert PR** automatically
+7. **Outcome validation** — Five minutes after the PR merges, the Outcome Validator queries Prometheus. If the error rate is still above 20%, it opens a revert PR automatically and emits `OutcomeFailed` to EventBridge.
 
 ---
 
@@ -120,29 +131,61 @@ Alertmanager / CloudWatch
 
 ---
 
-## Configuration
+## Demo
 
-Copy `terraform/terraform.tfvars.example` to `terraform/terraform.tfvars` and fill in:
+_Coming soon._
 
-```hcl
-github_owner            = "your-org"
-github_repo             = "your-gitops-repo"
-github_token_secret_arn = "arn:aws:secretsmanager:..."
+---
 
-# Optional
-prometheus_query_url = "https://prom.example.com"
-slack_webhook_url    = "https://hooks.slack.com/..."
-webhook_secret       = ""   # generate: openssl rand -hex 32
-enable_multi_agent   = true # set false for single-agent mode
-model_provider       = "bedrock"  # or "openai"
-```
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Compute | AWS Lambda (Python 3.12), AWS Step Functions (Standard Workflow) |
+| Event routing | AWS EventBridge (custom bus, DLQ, 7-day archive) |
+| Storage | S3 (signal bundles), DynamoDB (dedup + audit log) |
+| AI / LLM | AWS Bedrock (Claude 3 Haiku) · OpenAI GPT-4 |
+| GitOps | Argo CD (Helm) |
+| Kubernetes | EKS 1.33 |
+| Observability | Prometheus + Grafana (Helm) |
+| Policy | OPA / Gatekeeper (Helm) |
+| Infrastructure | Terraform (18 custom modules) |
+| Webhook auth | HMAC-SHA256 (API Gateway) |
+
+---
+
+## What's Actually Implemented
+
+This is a portfolio project. Here's an honest account of what's built:
+
+**Built and working**
+- All 7 Lambda functions — Signal Collector, Decision Engine, Outcome Validator, Classifier Agent, Root Cause Agent, Action Planner, Confidence Scorer
+- Full Step Functions state machine with retry and fallback logic
+- GitHub PR automation: branch creation, commit, PR open, auto-merge
+- Outcome validation with automatic revert PR
+- DynamoDB deduplication and audit logging
+- HMAC webhook validation
+- 33 unit tests across all 7 functions
+- 18 Terraform modules provisioning the full stack
+
+**Intentional scope decisions**
+- The `enable_multi_agent = false` default skips confidence scoring — suitable for demos, not production
+- OPA/Gatekeeper is deployed but no ConstraintTemplate resources are defined out of the box; the `policy-check.yaml` CI step handles PR-time enforcement
+- Lambda source exists in two places (`lambdas/` for local dev, `terraform/modules/lambda_*/src/` for deploy) — kept in sync manually; a build step would eliminate this
+- Service name resolution derives from Alertmanager labels; alerts missing `service` or `namespace` labels fall back to `unknown`
+- No webhook rate limiting beyond API Gateway defaults
+
+---
+
+## What's Next
+
+_Coming soon._
 
 ---
 
 ## Local Development
 
 ```bash
-# Install dev dependencies
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r lambdas/requirements-dev.txt
 
@@ -153,10 +196,26 @@ cd lambdas && pytest tests/ -v
 make lint
 
 # Terraform
-cd terraform
-terraform init
-terraform validate
+cd terraform && terraform init && terraform validate
 terraform plan -var-file=terraform.tfvars
+```
+
+---
+
+## Configuration
+
+Copy `terraform/terraform.tfvars.example` to `terraform/terraform.tfvars`:
+
+```hcl
+github_owner            = "your-org"
+github_repo             = "your-gitops-repo"
+github_token_secret_arn = "arn:aws:secretsmanager:..."
+
+prometheus_query_url = "https://prom.example.com"
+slack_webhook_url    = "https://hooks.slack.com/..."
+webhook_secret       = ""   # openssl rand -hex 32
+enable_multi_agent   = true
+model_provider       = "bedrock"  # or "openai"
 ```
 
 ---
@@ -178,10 +237,8 @@ The `webhook_url` output is the endpoint to configure in Alertmanager's `receive
 | Component | ~Monthly (us-east-1) |
 |---|---|
 | EKS cluster (1.33, 2× t2.medium) | ~$140 |
-| Lambda invocations | < $5 |
-| EventBridge + Step Functions | < $5 |
-| DynamoDB + S3 | < $3 |
-| API Gateway | < $2 |
+| Lambda + Step Functions + EventBridge | < $10 |
+| DynamoDB + S3 + API Gateway | < $5 |
 | **Total** | **~$155–$178** |
 
 ---
@@ -207,28 +264,6 @@ The `webhook_url` output is the endpoint to configure in Alertmanager's `receive
 ├── Makefile                    # install / test / lint / tf-* targets
 └── docs/                       # Architecture diagrams, runbooks
 ```
-
----
-
-## Known Limitations
-
-These are deliberate scope decisions for a portfolio project, not production gaps that went unnoticed.
-
-**Routing / confidence gating**
-- The three-tier confidence table (auto_apply / open_pr / escalate) is only active when `enable_multi_agent = true`. The default single-agent path (`enable_multi_agent = false`) opens a PR without confidence scoring — suitable for demo and cost-sensitive environments.
-
-**Service and namespace resolution**
-- The service name and namespace are derived directly from Alertmanager alert labels (`service`, `namespace`). Alerts that omit these labels fall back to `"unknown"`, which will cause the GitOps write path to target `gitops/apps/unknown/...`. Ensure your Prometheus rules and Alertmanager configs emit these labels.
-- The GitOps write path assumes `gitops/apps/{service}/` matches the directory layout in the repo. Services with different naming conventions require a mapping layer not yet implemented.
-
-**Policy enforcement**
-- OPA/Gatekeeper is deployed as a Helm chart but no Constraint or ConstraintTemplate resources are defined out of the box. The `policy-check.yaml` CI step enforces replica bounds and image tag allowlists at PR time; runtime admission control requires adding OPA policies.
-- The `tune_resources` action reads `memory` and `cpu` targets from the LLM plan params. If the LLM does not populate these fields, no resource change is committed.
-
-**Infrastructure**
-- Lambda source code exists in two places: `lambdas/` (local dev/test) and `terraform/modules/lambda_*/src/` (deployed). They must be kept in sync manually. A symlink or build step would eliminate this.
-- No rate limiting is applied to the webhook endpoint beyond API Gateway defaults.
-- The EKS cluster runs `t2.medium` nodes (burstable). CPU-intensive workloads may experience throttling under sustained load.
 
 ---
 
