@@ -20,5 +20,34 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "sse" {
   }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "lifecycle" {
+  bucket = aws_s3_bucket.this.id
+
+  # 1. Abort incomplete multipart uploads after 7 days
+  rule {
+    id     = "abort-incomplete-multipart"
+    status = "Enabled"
+    abort_incomplete_multipart_upload { days_after_initiation = 7 }
+  }
+
+  # 2. Expire non-current versions after 30 days
+  rule {
+    id     = "expire-noncurrent-versions"
+    status = "Enabled"
+    noncurrent_version_expiration { noncurrent_days = 30 }
+  }
+
+  # 3. Transition current objects to INTELLIGENT_TIERING after 30 days
+  rule {
+    id     = "intelligent-tiering-transition"
+    status = "Enabled"
+    transition {
+      days          = 30
+      storage_class = "INTELLIGENT_TIERING"
+    }
+    filter {}
+  }
+}
+
 output "bucket_name" { value = aws_s3_bucket.this.bucket }
 output "bucket_arn" { value = aws_s3_bucket.this.arn }
