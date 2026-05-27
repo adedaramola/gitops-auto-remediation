@@ -196,14 +196,14 @@ module "sentinel_pipeline" {
 # EventBridge rules
 ########################
 module "rules" {
-  source              = "./modules/eventbridge_rules"
-  project_name        = local.name
-  event_bus_name      = module.eventing.event_bus_name
-  bundler_lambda_arn  = module.signal_collector_lambda.lambda_arn
-  agent_lambda_arn    = module.decision_engine_lambda.lambda_arn
+  source                       = "./modules/eventbridge_rules"
+  project_name                 = local.name
+  event_bus_name               = module.eventing.event_bus_name
+  bundler_lambda_arn           = module.signal_collector_lambda.lambda_arn
+  agent_lambda_arn             = module.decision_engine_lambda.lambda_arn
   outcome_validator_lambda_arn = module.outcome_validator_lambda.lambda_arn
-  sfn_arn             = module.sentinel_pipeline.state_machine_arn
-  events_sfn_role_arn = module.iam.events_sfn_role_arn
+  sfn_arn                      = module.sentinel_pipeline.state_machine_arn
+  events_sfn_role_arn          = module.iam.events_sfn_role_arn
 }
 
 ########################
@@ -258,4 +258,25 @@ module "signals_table" {
 module "audit_log" {
   source       = "./modules/dynamodb_audit_log"
   project_name = local.name
+}
+
+# ── Lambda log groups with retention ─────────────────────────────────────────
+locals {
+  lambda_function_names = [
+    "${local.name}-signal-collector",
+    "${local.name}-decision-engine",
+    "${local.name}-outcome-validator",
+    "${local.name}-classifier-agent",
+    "${local.name}-root-cause-agent",
+    "${local.name}-action-planner",
+    "${local.name}-confidence-scorer",
+  ]
+}
+
+resource "aws_cloudwatch_log_group" "lambda_logs" {
+  for_each          = toset(local.lambda_function_names)
+  name              = "/aws/lambda/${each.value}"
+  retention_in_days = var.log_retention_days
+
+  tags = { Project = local.name }
 }
