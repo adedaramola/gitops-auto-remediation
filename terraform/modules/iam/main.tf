@@ -220,7 +220,17 @@ resource "aws_iam_role_policy" "sfn_invoke_lambdas" {
     Version = "2012-10-17"
     Statement = [
       { Effect = "Allow", Action = ["lambda:InvokeFunction"], Resource = ["*"] },
-      { Effect = "Allow", Action = ["xray:PutTraceSegments", "xray:PutTelemetryRecords", "xray:GetSamplingRules", "xray:GetSamplingTargets"], Resource = ["*"] }
+      { Effect = "Allow", Action = ["xray:PutTraceSegments", "xray:PutTelemetryRecords", "xray:GetSamplingRules", "xray:GetSamplingTargets"], Resource = ["*"] },
+      { Effect = "Allow", Action = [
+        "logs:CreateLogDelivery",
+        "logs:GetLogDelivery",
+        "logs:UpdateLogDelivery",
+        "logs:DeleteLogDelivery",
+        "logs:ListLogDeliveries",
+        "logs:PutResourcePolicy",
+        "logs:DescribeResourcePolicies",
+        "logs:DescribeLogGroups",
+      ], Resource = ["*"] }
     ]
   })
 }

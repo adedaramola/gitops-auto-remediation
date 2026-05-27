@@ -44,6 +44,9 @@ module "eks" {
   create_kms_key            = false
   cluster_encryption_config = {}
 
+  cluster_enabled_log_types              = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
+  cloudwatch_log_group_retention_in_days = var.log_retention_days
+
   eks_managed_node_groups = {
     default = {
       instance_types = ["t2.medium"]
@@ -69,6 +72,16 @@ module "argocd" {
 module "observability" {
   source       = "./modules/observability"
   project_name = local.name
+}
+
+module "log_shipping" {
+  source             = "./modules/log_shipping"
+  project_name       = local.name
+  cluster_name       = var.cluster_name
+  aws_region         = var.aws_region
+  oidc_provider_arn  = module.eks.oidc_provider_arn
+  oidc_provider      = replace(module.eks.cluster_oidc_issuer_url, "https://", "")
+  log_retention_days = var.log_retention_days
 }
 
 module "gatekeeper" {
@@ -190,6 +203,7 @@ module "sentinel_pipeline" {
   risk_lambda_arn        = module.confidence_scorer_agent.lambda_arn
   agent_lambda_arn       = module.decision_engine_lambda.lambda_arn
   sfn_role_arn           = module.iam.sfn_role_arn
+  log_retention_days     = var.log_retention_days
 }
 
 ########################
@@ -242,6 +256,7 @@ module "webhook" {
   project_name        = local.name
   bundler_lambda_arn  = module.signal_collector_lambda.lambda_arn
   bundler_lambda_name = module.signal_collector_lambda.lambda_name
+  log_retention_days  = var.log_retention_days
 }
 
 output "webhook_url" {

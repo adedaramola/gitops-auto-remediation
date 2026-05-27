@@ -5,11 +5,27 @@ variable "remediation_lambda_arn" { type = string }
 variable "risk_lambda_arn" { type = string }
 variable "agent_lambda_arn" { type = string } # decision_engine Lambda used for PR opening
 variable "sfn_role_arn" { type = string }
+variable "log_retention_days" {
+  type    = number
+  default = 30
+}
+
+resource "aws_cloudwatch_log_group" "sfn" {
+  name              = "/aws/vendedlogs/states/${var.project_name}-multi-agent-pipeline"
+  retention_in_days = var.log_retention_days
+  tags              = { Project = var.project_name }
+}
 
 resource "aws_sfn_state_machine" "multi_agent" {
   name     = "${var.project_name}-multi-agent-pipeline"
   role_arn = var.sfn_role_arn
   type     = "STANDARD"
+
+  logging_configuration {
+    log_destination        = "${aws_cloudwatch_log_group.sfn.arn}:*"
+    include_execution_data = true
+    level                  = "ALL"
+  }
 
   definition = jsonencode({
     Comment = "AI-Powered Multi-Agent GitOps Remediation Pipeline"
@@ -182,3 +198,5 @@ resource "aws_sfn_state_machine" "multi_agent" {
 
 output "state_machine_arn" { value = aws_sfn_state_machine.multi_agent.arn }
 output "state_machine_name" { value = aws_sfn_state_machine.multi_agent.name }
+output "log_group_name" { value = aws_cloudwatch_log_group.sfn.name }
+output "log_group_arn" { value = aws_cloudwatch_log_group.sfn.arn }

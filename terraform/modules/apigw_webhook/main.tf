@@ -1,6 +1,10 @@
 variable "project_name" { type = string }
 variable "bundler_lambda_arn" { type = string }
 variable "bundler_lambda_name" { type = string }
+variable "log_retention_days" {
+  type    = number
+  default = 30
+}
 
 resource "aws_apigatewayv2_api" "this" {
   name          = "${var.project_name}-webhook"
@@ -20,10 +24,36 @@ resource "aws_apigatewayv2_route" "post" {
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
+resource "aws_cloudwatch_log_group" "access_logs" {
+  name              = "/aws/apigateway/${var.project_name}-webhook"
+  retention_in_days = var.log_retention_days
+  tags              = { Project = var.project_name }
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.this.id
   name        = "$default"
   auto_deploy = true
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.access_logs.arn
+    format = jsonencode({
+      timestamp           = "$context.requestTime"
+      apigw_request_id    = "$context.requestId"
+      http_method         = "$context.httpMethod"
+      route               = "$context.routeKey"
+      status              = "$context.status"
+      response_length     = "$context.responseLength"
+      source_ip           = "$context.identity.sourceIp"
+      user_agent          = "$context.identity.userAgent"
+      protocol            = "$context.protocol"
+      integration_status  = "$context.integrationStatus"
+      integration_latency = "$context.integrationLatency"
+      integration_error   = "$context.integrationErrorMessage"
+      error_message       = "$context.error.message"
+      error_response_type = "$context.error.responseType"
+    })
+  }
 }
 
 resource "aws_lambda_permission" "apigw_invoke" {
@@ -36,4 +66,12 @@ resource "aws_lambda_permission" "apigw_invoke" {
 
 output "webhook_url" {
   value = "${aws_apigatewayv2_api.this.api_endpoint}/webhook"
+}
+
+output "access_log_group_name" {
+  value = aws_cloudwatch_log_group.access_logs.name
+}
+
+output "access_log_group_arn" {
+  value = aws_cloudwatch_log_group.access_logs.arn
 }
