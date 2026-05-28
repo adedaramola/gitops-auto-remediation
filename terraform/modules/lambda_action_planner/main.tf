@@ -19,7 +19,8 @@ data "archive_file" "zip" {
 resource "aws_lambda_function" "this" {
   function_name                  = "${var.project_name}-action-planner"
   role                           = var.role_arn
-  runtime                        = "python3.11"
+  runtime                        = "python3.12"
+  architectures                  = ["arm64"]
   handler                        = "app.handler"
   filename                       = data.archive_file.zip.output_path
   source_code_hash               = data.archive_file.zip.output_base64sha256
