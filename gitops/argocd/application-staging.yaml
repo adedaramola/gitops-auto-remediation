@@ -11,8 +11,11 @@ spec:
     path: gitops/clusters/staging
   destination:
     server: https://kubernetes.default.svc
-    namespace: demo
+    namespace: demo-staging
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - SkipDryRunOnMissingResource=true
