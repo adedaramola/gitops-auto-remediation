@@ -51,5 +51,22 @@ resource "aws_s3_bucket_lifecycle_configuration" "lifecycle" {
   }
 }
 
+resource "aws_s3_bucket_policy" "ssl_only" {
+  bucket = aws_s3_bucket.this.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyNonSSL"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = [aws_s3_bucket.this.arn, "${aws_s3_bucket.this.arn}/*"]
+      Condition = {
+        Bool = { "aws:SecureTransport" = "false" }
+      }
+    }]
+  })
+}
+
 output "bucket_name" { value = aws_s3_bucket.this.bucket }
 output "bucket_arn" { value = aws_s3_bucket.this.arn }
