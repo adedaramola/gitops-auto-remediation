@@ -10,6 +10,25 @@ from unittest.mock import MagicMock, patch, call
 # Stub dependencies before import
 # ---------------------------------------------------------------------------
 
+# Stub botocore for EKS auth helpers
+botocore_stub = types.ModuleType("botocore")
+botocore_credentials_stub = types.ModuleType("botocore.credentials")
+botocore_session_stub = types.ModuleType("botocore.session")
+botocore_signers_stub = types.ModuleType("botocore.signers")
+botocore_session_stub.get_session = MagicMock()
+botocore_signers_stub.RequestSigner = MagicMock()
+botocore_credentials_stub.Credentials = MagicMock(side_effect=lambda access_key, secret_key, token=None, method=None: {
+    "access_key": access_key,
+    "secret_key": secret_key,
+    "token": token,
+    "method": method,
+})
+botocore_stub.session = botocore_session_stub
+sys.modules.setdefault("botocore", botocore_stub)
+sys.modules.setdefault("botocore.credentials", botocore_credentials_stub)
+sys.modules.setdefault("botocore.session", botocore_session_stub)
+sys.modules.setdefault("botocore.signers", botocore_signers_stub)
+
 boto3_stub = types.ModuleType("boto3")
 boto3_stub.client = MagicMock(return_value=MagicMock())
 sys.modules.setdefault("boto3", boto3_stub)
@@ -85,6 +104,43 @@ class TestPromQuery(unittest.TestCase):
             result = app._prom_query("up")
         self.assertIn("error", result)
         app.PROM_URL = ""
+
+    def test_proxies_incluster_service_url_via_k8s_api(self):
+        app.PROM_URL = "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
+        os.environ["CLUSTER_NAME"] = "gitops-sentinel-cluster"
+        response = MagicMock()
+        response.json.return_value = {"status": "success"}
+        response.raise_for_status = MagicMock()
+        with (
+            patch.object(app, "_k8s_api", return_value=("https://cluster.example", b"ca-bytes")),
+            patch.object(app, "_eks_token", return_value="token"),
+            patch.object(app._SESSION, "get", return_value=response) as mock_get,
+        ):
+            result = app._prom_query("up")
+
+        self.assertEqual(result, {"status": "success"})
+        called_url = mock_get.call_args.args[0]
+        self.assertIn("/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/query", called_url)
+        self.assertEqual(mock_get.call_args.kwargs["params"], {"query": "up"})
+        app.PROM_URL = ""
+        os.environ.pop("CLUSTER_NAME", None)
+
+    def test_detects_cluster_service_prometheus_url(self):
+        target = app._prometheus_proxy_target(
+            "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
+        )
+        self.assertEqual(
+            target,
+            {
+                "scheme": "http",
+                "service": "kube-prometheus-stack-prometheus",
+                "namespace": "monitoring",
+                "port": 9090,
+            },
+        )
+
+    def test_ignores_non_cluster_service_prometheus_url(self):
+        self.assertIsNone(app._prometheus_proxy_target("http://internal-prometheus.example.com:9090"))
 
 
 class TestSlack(unittest.TestCase):

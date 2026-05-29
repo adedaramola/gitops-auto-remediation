@@ -133,7 +133,20 @@ Alertmanager / CloudWatch
 
 ## Demo
 
-_Coming soon._
+For the MVP demo, focus on one end-to-end story:
+
+1. Trigger a `HighHTTP5xxErrorRate` alert for `demo-service`
+2. Show Signal Collector writing the enriched incident bundle to S3
+3. Show the multi-agent pipeline in Step Functions
+4. Show the confidence-based route decision
+5. Show the GitHub PR against the GitOps repo
+6. Merge the PR and let Argo CD sync it
+7. Show Outcome Validator reporting `OutcomeValidated` or `OutcomeFailed`
+
+This is the clearest path to demonstrate the product's core claim: AI can reason about a Kubernetes incident, write a GitOps change, and validate the result without direct cluster write access.
+
+See [docs/demo-script.md](/Users/adedaramola/IT-Practice/AI-Projects/portfolio/gitops-sentinel/docs/demo-script.md) for the talk track.
+Use [docs/demo-alert.json](/Users/adedaramola/IT-Practice/AI-Projects/portfolio/gitops-sentinel/docs/demo-alert.json) with `make demo-alert` for the fastest live trigger.
 
 ---
 
@@ -146,7 +159,7 @@ _Coming soon._
 | Storage | S3 (signal bundles), DynamoDB (dedup + audit log) |
 | AI / LLM | AWS Bedrock (Claude 3 Haiku) · OpenAI GPT-4 |
 | GitOps | Argo CD (Helm) |
-| Kubernetes | EKS 1.33 |
+| Kubernetes | EKS 1.34 |
 | Observability | Prometheus + Grafana (Helm) |
 | Policy | OPA / Gatekeeper (Helm) |
 | Infrastructure | Terraform (18 custom modules) |
@@ -171,9 +184,33 @@ This is a portfolio project. Here's an honest account of what's built:
 **Intentional scope decisions**
 - The `enable_multi_agent = false` default skips confidence scoring — suitable for demos, not production
 - OPA/Gatekeeper is deployed but no ConstraintTemplate resources are defined out of the box; the `policy-check.yaml` CI step handles PR-time enforcement
-- Lambda source exists in two places (`lambdas/` for local dev, `terraform/modules/lambda_*/src/` for deploy) — kept in sync manually; a build step would eliminate this
+- Terraform packages Lambda deploy artifacts directly from `lambdas/` using a local build step, so the machine running `terraform apply` needs `python3` and `pip`
 - Service name resolution derives from Alertmanager labels; alerts missing `service` or `namespace` labels fall back to `unknown`
 - No webhook rate limiting beyond API Gateway defaults
+
+---
+
+## MVP Scope
+
+For a live demo, treat GitOps Sentinel as an MVP with one primary success path:
+
+- Incident: `HighHTTP5xxErrorRate`
+- Service: `demo-service`
+- Routing mode: `enable_multi_agent = true`
+- LLM provider: Bedrock by default
+- Outcome: open a GitHub PR, reconcile via Argo CD, then verify with Outcome Validator
+
+What to emphasize in the demo:
+
+- Confidence-gated routing is real
+- The system writes changes through Git, not directly to the cluster
+- Every decision is captured in S3, Step Functions, GitHub, and DynamoDB
+
+What not to overclaim in the demo:
+
+- This is not a hardened production deployment
+- Not every incident type has been exercised end to end
+- Safety controls are present, but some operational hardening is intentionally out of scope for the MVP
 
 ---
 
@@ -216,7 +253,21 @@ slack_webhook_url    = "https://hooks.slack.com/..."
 webhook_secret       = ""   # openssl rand -hex 32
 enable_multi_agent   = true
 model_provider       = "bedrock"  # or "openai"
+bedrock_model_id     = "anthropic.claude-3-haiku-20240307-v1:0"
+openai_secret_arn    = ""   # required only when model_provider = "openai"
 ```
+
+Recommended MVP profile:
+
+```hcl
+enable_multi_agent             = true
+model_provider                 = "bedrock"
+bedrock_model_id               = "anthropic.claude-3-haiku-20240307-v1:0"
+enable_private_prometheus_endpoint = true
+enable_k8s_readonly_enrichment = true
+```
+
+That profile gives you the best demo story because it exercises the full confidence-gated flow and the post-change validation path.
 
 ---
 
@@ -230,13 +281,21 @@ terraform apply -var-file=terraform.tfvars
 
 The `webhook_url` output is the endpoint to configure in Alertmanager's `receivers`.
 
+Fastest MVP trigger after deploy:
+
+```bash
+make demo-alert \
+  WEBHOOK_URL="<webhook_url_from_terraform>" \
+  WEBHOOK_SECRET="<webhook_secret_if_configured>"
+```
+
 ---
 
 ## Cost Estimate
 
 | Component | ~Monthly (us-east-1) |
 |---|---|
-| EKS cluster (1.33, 2× t2.medium) | ~$140 |
+| EKS cluster (1.34, 2× t2.medium) | ~$140 |
 | Lambda + Step Functions + EventBridge | < $10 |
 | DynamoDB + S3 + API Gateway | < $5 |
 | **Total** | **~$155–$178** |

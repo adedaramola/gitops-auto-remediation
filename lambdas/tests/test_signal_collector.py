@@ -1,4 +1,5 @@
 """Unit tests for signal_collector/app.py"""
+import base64
 import hashlib
 import json
 import os
@@ -13,12 +14,20 @@ from unittest.mock import MagicMock, patch
 
 # Stub botocore before anything imports it
 botocore_stub = types.ModuleType("botocore")
+botocore_credentials_stub = types.ModuleType("botocore.credentials")
 botocore_session_stub = types.ModuleType("botocore.session")
 botocore_signers_stub = types.ModuleType("botocore.signers")
 botocore_session_stub.get_session = MagicMock()
 botocore_signers_stub.RequestSigner = MagicMock()
+botocore_credentials_stub.Credentials = MagicMock(side_effect=lambda access_key, secret_key, token=None, method=None: {
+    "access_key": access_key,
+    "secret_key": secret_key,
+    "token": token,
+    "method": method,
+})
 botocore_stub.session = botocore_session_stub
 sys.modules.setdefault("botocore", botocore_stub)
+sys.modules.setdefault("botocore.credentials", botocore_credentials_stub)
 sys.modules.setdefault("botocore.session", botocore_session_stub)
 sys.modules.setdefault("botocore.signers", botocore_signers_stub)
 
@@ -118,6 +127,113 @@ class TestPromQuery(unittest.TestCase):
             result = app._prom_query("up")
         self.assertIn("error", result)
         app.PROM_URL = ""
+
+    def test_proxies_incluster_service_url_via_k8s_api(self):
+        app.PROM_URL = "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
+        app.CLUSTER_NAME = "gitops-sentinel-cluster"
+        response = MagicMock()
+        response.json.return_value = {"status": "success"}
+        response.raise_for_status = MagicMock()
+        with (
+            patch.object(app, "_k8s_api", return_value=("https://cluster.example", b"ca-bytes")),
+            patch.object(app, "_eks_token", return_value="token"),
+            patch.object(app._SESSION, "get", return_value=response) as mock_get,
+        ):
+            result = app._prom_query("up")
+
+        self.assertEqual(result, {"status": "success"})
+        called_url = mock_get.call_args.args[0]
+        self.assertIn("/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/query", called_url)
+        self.assertEqual(mock_get.call_args.kwargs["params"], {"query": "up"})
+        app.PROM_URL = ""
+        app.CLUSTER_NAME = ""
+
+    def test_detects_cluster_service_prometheus_url(self):
+        target = app._prometheus_proxy_target(
+            "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
+        )
+        self.assertEqual(
+            target,
+            {
+                "scheme": "http",
+                "service": "kube-prometheus-stack-prometheus",
+                "namespace": "monitoring",
+                "port": 9090,
+            },
+        )
+
+    def test_ignores_non_cluster_service_prometheus_url(self):
+        self.assertIsNone(app._prometheus_proxy_target("http://internal-prometheus.example.com:9090"))
+
+
+class TestEksToken(unittest.TestCase):
+    def test_builds_presigned_eks_bearer_token(self):
+        session = MagicMock()
+        creds = MagicMock(access_key="AKIA", secret_key="SECRET", token="TOKEN", method="assume-role")
+        frozen = types.SimpleNamespace(access_key="AKIA", secret_key="SECRET", token="TOKEN", method="assume-role")
+        creds.get_frozen_credentials.return_value = frozen
+        session.get_credentials.return_value = creds
+        session.get_component.return_value = "events"
+        sts_model = MagicMock(service_id="STS", signing_name="sts")
+        session.get_service_model.return_value = sts_model
+        signer = MagicMock()
+        signer.generate_presigned_url.return_value = "https://signed.example"
+
+        with (
+            patch.object(app.botocore.session, "get_session", return_value=session),
+            patch.object(app, "RequestSigner", return_value=signer) as mock_signer,
+        ):
+            token = app._eks_token("gitops-sentinel-cluster")
+
+        mock_signer.assert_called_once_with(
+            service_id="STS",
+            region_name=app.AWS_REGION,
+            signing_name="sts",
+            signature_version="v4",
+            credentials={
+                "access_key": "AKIA",
+                "secret_key": "SECRET",
+                "token": "TOKEN",
+                "method": "assume-role",
+            },
+            event_emitter="events",
+        )
+        self.assertTrue(token.startswith("k8s-aws-v1."))
+        encoded = token.removeprefix("k8s-aws-v1.")
+        padded = encoded + ("=" * ((4 - len(encoded) % 4) % 4))
+        self.assertEqual(base64.urlsafe_b64decode(padded).decode("utf-8"), "https://signed.example")
+
+    def test_wraps_readonly_credentials_for_request_signer(self):
+        session = MagicMock()
+        creds = types.SimpleNamespace(
+            access_key="AKIA2",
+            secret_key="SECRET2",
+            token="TOKEN2",
+            method="env",
+        )
+        session.get_credentials.return_value = creds
+        session.get_component.return_value = "events"
+        sts_model = MagicMock(service_id="STS", signing_name="sts")
+        session.get_service_model.return_value = sts_model
+        signer = MagicMock()
+        signer.generate_presigned_url.return_value = "https://signed.example"
+
+        with (
+            patch.object(app.botocore.session, "get_session", return_value=session),
+            patch.object(app, "RequestSigner", return_value=signer) as mock_signer,
+        ):
+            app._eks_token("gitops-sentinel-cluster")
+
+        self.assertFalse(hasattr(creds, "get_frozen_credentials"))
+        self.assertEqual(
+            mock_signer.call_args.kwargs["credentials"],
+            {
+                "access_key": "AKIA2",
+                "secret_key": "SECRET2",
+                "token": "TOKEN2",
+                "method": "env",
+            },
+        )
 
 
 class TestWebhookSecretValidation(unittest.TestCase):

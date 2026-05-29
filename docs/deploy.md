@@ -13,8 +13,14 @@
    github_owner            = "your-org"
    github_repo             = "your-gitops-repo"
    github_token_secret_arn = "arn:aws:secretsmanager:..."
-   enable_multi_agent      = true   # set false for single-agent mode
+   enable_multi_agent      = true
+   model_provider          = "bedrock"
+   bedrock_model_id        = "anthropic.claude-3-haiku-20240307-v1:0"
+   enable_private_prometheus_endpoint = true
+   enable_k8s_readonly_enrichment = true
    ```
+
+   This is the recommended MVP demo profile. It gives you the full confidence-gated pipeline plus Prometheus-backed outcome validation.
 
 2. Deploy infrastructure:
    ```bash
@@ -38,8 +44,20 @@
 
 5. Trigger an alert and verify:
    - S3 signal bundle is created under `incidents/`
-   - GitHub PR is opened by the Decision Engine
+   - Step Functions execution is created
+   - GitHub PR is opened by the Decision Engine or Action Planner
    - Outcome Validator posts `OutcomeValidated` or `OutcomeFailed`
+
+## Recommended MVP demo path
+Use a single polished scenario instead of trying to prove every capability:
+
+1. Deploy `demo-service`
+2. Trigger `HighHTTP5xxErrorRate`
+3. Show the enriched signal bundle in S3
+4. Show the Step Functions execution and route decision
+5. Show the GitHub PR in the GitOps repo
+6. Merge the PR and show Argo CD reconciliation
+7. Show the Outcome Validator result
 
 ## Optional: Prometheus query URL
 Set `prometheus_query_url` in `terraform.tfvars` if you have a reachable Prometheus endpoint.

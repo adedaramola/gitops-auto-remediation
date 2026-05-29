@@ -2,10 +2,11 @@ variable "project_name" { type = string }
 variable "role_arn" { type = string }
 variable "aws_region" { type = string }
 
-data "archive_file" "zip" {
-  type        = "zip"
-  source_dir  = "${path.module}/src"
-  output_path = "${path.module}/function.zip"
+module "package" {
+  source            = "../lambda_package"
+  function_name     = "confidence_scorer"
+  source_dir        = "${path.root}/../lambdas/confidence_scorer"
+  requirements_file = "${path.root}/../lambdas/requirements.txt"
 }
 
 resource "aws_lambda_function" "this" {
@@ -14,8 +15,8 @@ resource "aws_lambda_function" "this" {
   runtime                        = "python3.12"
   architectures                  = ["arm64"]
   handler                        = "app.handler"
-  filename                       = data.archive_file.zip.output_path
-  source_code_hash               = data.archive_file.zip.output_base64sha256
+  filename                       = module.package.filename
+  source_code_hash               = module.package.source_code_hash
   timeout                        = 30
   reserved_concurrent_executions = 5
 

@@ -6,19 +6,19 @@ locals {
   dashboard_namespace = local.monitoring_namespace
 
   pipeline_dashboard = jsonencode({
-    title       = "GitOps Sentinel — Pipeline Health"
-    uid         = "gitops-sentinel-pipeline"
+    title         = "GitOps Sentinel — Pipeline Health"
+    uid           = "gitops-sentinel-pipeline"
     schemaVersion = 36
-    refresh     = "30s"
-    time        = { from = "now-3h", to = "now" }
+    refresh       = "30s"
+    time          = { from = "now-3h", to = "now" }
 
     # ── Row: Incident intake ───────────────────────────────────────────────────
     panels = [
       {
-        id    = 1
-        type  = "stat"
-        title = "Incidents Received (1h)"
-        gridPos = { h = 4, w = 4, x = 0, y = 0 }
+        id         = 1
+        type       = "stat"
+        title      = "Incidents Received (1h)"
+        gridPos    = { h = 4, w = 4, x = 0, y = 0 }
         datasource = { type = "cloudwatch", uid = "cloudwatch" }
         targets = [{
           namespace  = "GitOpsSentinel"
@@ -30,10 +30,10 @@ locals {
         options = { reduceOptions = { calcs = ["sum"] } }
       },
       {
-        id    = 2
-        type  = "stat"
-        title = "Dedup Suppressions (1h)"
-        gridPos = { h = 4, w = 4, x = 4, y = 0 }
+        id         = 2
+        type       = "stat"
+        title      = "Dedup Suppressions (1h)"
+        gridPos    = { h = 4, w = 4, x = 4, y = 0 }
         datasource = { type = "cloudwatch", uid = "cloudwatch" }
         targets = [{
           namespace  = "GitOpsSentinel"
@@ -45,10 +45,10 @@ locals {
         options = { reduceOptions = { calcs = ["sum"] } }
       },
       {
-        id    = 3
-        type  = "stat"
-        title = "PRs Opened (1h)"
-        gridPos = { h = 4, w = 4, x = 8, y = 0 }
+        id         = 3
+        type       = "stat"
+        title      = "PRs Opened (1h)"
+        gridPos    = { h = 4, w = 4, x = 8, y = 0 }
         datasource = { type = "cloudwatch", uid = "cloudwatch" }
         targets = [{
           namespace  = "GitOpsSentinel"
@@ -60,10 +60,10 @@ locals {
         options = { reduceOptions = { calcs = ["sum"] } }
       },
       {
-        id    = 4
-        type  = "stat"
-        title = "Outcomes Validated (1h)"
-        gridPos = { h = 4, w = 4, x = 12, y = 0 }
+        id         = 4
+        type       = "stat"
+        title      = "Outcomes Validated (1h)"
+        gridPos    = { h = 4, w = 4, x = 12, y = 0 }
         datasource = { type = "cloudwatch", uid = "cloudwatch" }
         targets = [{
           namespace  = "GitOpsSentinel"
@@ -73,13 +73,13 @@ locals {
           dimensions = {}
         }]
         fieldConfig = { defaults = { color = { mode = "fixed", fixedColor = "green" } } }
-        options = { reduceOptions = { calcs = ["sum"] } }
+        options     = { reduceOptions = { calcs = ["sum"] } }
       },
       {
-        id    = 5
-        type  = "stat"
-        title = "Outcome Failures (1h)"
-        gridPos = { h = 4, w = 4, x = 16, y = 0 }
+        id         = 5
+        type       = "stat"
+        title      = "Outcome Failures (1h)"
+        gridPos    = { h = 4, w = 4, x = 16, y = 0 }
         datasource = { type = "cloudwatch", uid = "cloudwatch" }
         targets = [{
           namespace  = "GitOpsSentinel"
@@ -89,13 +89,13 @@ locals {
           dimensions = {}
         }]
         fieldConfig = { defaults = { color = { mode = "fixed", fixedColor = "red" } } }
-        options = { reduceOptions = { calcs = ["sum"] } }
+        options     = { reduceOptions = { calcs = ["sum"] } }
       },
       {
-        id    = 6
-        type  = "stat"
-        title = "Auto-Reverts (1h)"
-        gridPos = { h = 4, w = 4, x = 20, y = 0 }
+        id         = 6
+        type       = "stat"
+        title      = "Auto-Reverts (1h)"
+        gridPos    = { h = 4, w = 4, x = 20, y = 0 }
         datasource = { type = "cloudwatch", uid = "cloudwatch" }
         targets = [{
           namespace  = "GitOpsSentinel"
@@ -105,15 +105,15 @@ locals {
           dimensions = {}
         }]
         fieldConfig = { defaults = { color = { mode = "fixed", fixedColor = "orange" } } }
-        options = { reduceOptions = { calcs = ["sum"] } }
+        options     = { reduceOptions = { calcs = ["sum"] } }
       },
 
       # ── Row: Confidence routing ─────────────────────────────────────────────
       {
-        id    = 7
-        type  = "piechart"
-        title = "Routing Decisions (24h)"
-        gridPos = { h = 8, w = 8, x = 0, y = 4 }
+        id         = 7
+        type       = "piechart"
+        title      = "Routing Decisions (24h)"
+        gridPos    = { h = 8, w = 8, x = 0, y = 4 }
         datasource = { type = "cloudwatch", uid = "cloudwatch" }
         targets = [
           {
@@ -143,10 +143,10 @@ locals {
         ]
       },
       {
-        id    = 8
-        type  = "timeseries"
-        title = "Confidence Score (raw)"
-        gridPos = { h = 8, w = 16, x = 8, y = 4 }
+        id         = 8
+        type       = "timeseries"
+        title      = "Confidence Score (raw)"
+        gridPos    = { h = 8, w = 16, x = 8, y = 4 }
         datasource = { type = "cloudwatch", uid = "cloudwatch" }
         targets = [{
           namespace  = "GitOpsSentinel"
@@ -160,13 +160,13 @@ locals {
 
       # ── Row: Lambda errors (Logs Insights) ─────────────────────────────────
       {
-        id    = 9
-        type  = "timeseries"
-        title = "Lambda ERROR logs (5m buckets)"
-        gridPos = { h = 8, w = 12, x = 0, y = 12 }
+        id         = 9
+        type       = "timeseries"
+        title      = "Lambda ERROR logs (5m buckets)"
+        gridPos    = { h = 8, w = 12, x = 0, y = 12 }
         datasource = { type = "cloudwatch", uid = "cloudwatch" }
         targets = [{
-          queryMode     = "Logs"
+          queryMode = "Logs"
           logGroupNames = [
             "/aws/lambda/gitops-sentinel-signal-collector",
             "/aws/lambda/gitops-sentinel-decision-engine",
@@ -180,10 +180,10 @@ locals {
         }]
       },
       {
-        id    = 10
-        type  = "timeseries"
-        title = "Step Functions failures (5m buckets)"
-        gridPos = { h = 8, w = 12, x = 12, y = 12 }
+        id         = 10
+        type       = "timeseries"
+        title      = "Step Functions failures (5m buckets)"
+        gridPos    = { h = 8, w = 12, x = 12, y = 12 }
         datasource = { type = "cloudwatch", uid = "cloudwatch" }
         targets = [{
           queryMode     = "Logs"
@@ -194,10 +194,10 @@ locals {
 
       # ── Row: EventBridge DLQ depth ──────────────────────────────────────────
       {
-        id    = 11
-        type  = "stat"
-        title = "EventBridge DLQ depth (current)"
-        gridPos = { h = 4, w = 6, x = 0, y = 20 }
+        id         = 11
+        type       = "stat"
+        title      = "EventBridge DLQ depth (current)"
+        gridPos    = { h = 4, w = 6, x = 0, y = 20 }
         datasource = { type = "cloudwatch", uid = "cloudwatch" }
         targets = [{
           namespace  = "AWS/SQS"

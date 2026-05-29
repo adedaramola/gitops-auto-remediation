@@ -70,12 +70,11 @@ resource "aws_cloudwatch_log_metric_filter" "lambda_errors" {
   pattern        = "{ $.level = \"ERROR\" }"
 
   metric_transformation {
-    name          = "LambdaError"
-    namespace     = "GitOpsSentinel/Alerts"
-    value         = "1"
-    default_value = "0"
-    unit          = "Count"
-    dimensions    = { component = "$.component" }
+    name       = "LambdaError"
+    namespace  = "GitOpsSentinel/Alerts"
+    value      = "1"
+    unit       = "Count"
+    dimensions = { component = "$.component" }
   }
 }
 

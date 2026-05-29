@@ -2,6 +2,7 @@ variable "project_name" { type = string }
 variable "role_arn" { type = string }
 variable "aws_region" { type = string }
 variable "model_provider" { type = string }
+variable "bedrock_model_id" { type = string }
 variable "github_owner" { type = string }
 variable "github_repo" { type = string }
 variable "github_token_secret_arn" { type = string }
@@ -10,10 +11,11 @@ variable "openai_secret_arn" {
   default = ""
 }
 
-data "archive_file" "zip" {
-  type        = "zip"
-  source_dir  = "${path.module}/src"
-  output_path = "${path.module}/function.zip"
+module "package" {
+  source            = "../lambda_package"
+  function_name     = "action_planner"
+  source_dir        = "${path.root}/../lambdas/action_planner"
+  requirements_file = "${path.root}/../lambdas/requirements.txt"
 }
 
 resource "aws_lambda_function" "this" {
@@ -22,8 +24,8 @@ resource "aws_lambda_function" "this" {
   runtime                        = "python3.12"
   architectures                  = ["arm64"]
   handler                        = "app.handler"
-  filename                       = data.archive_file.zip.output_path
-  source_code_hash               = data.archive_file.zip.output_base64sha256
+  filename                       = module.package.filename
+  source_code_hash               = module.package.source_code_hash
   timeout                        = 90
   reserved_concurrent_executions = 5
 
@@ -32,6 +34,7 @@ resource "aws_lambda_function" "this" {
   environment {
     variables = {
       MODEL_PROVIDER              = var.model_provider
+      BEDROCK_MODEL_ID            = var.bedrock_model_id
       AWS_REGION_NAME             = var.aws_region
       GITHUB_OWNER                = var.github_owner
       GITHUB_REPO                 = var.github_repo

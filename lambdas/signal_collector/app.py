@@ -6,8 +6,10 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import boto3
+from botocore.credentials import Credentials
 import botocore.session
 from botocore.signers import RequestSigner
 import requests
@@ -58,14 +60,15 @@ def _log(level: str, msg: str, **ctx):
 
 
 # ── HTTP session with retries ─────────────────────────────────────────────────
-def _make_session() -> requests.Session:
+def _make_session(total_retries: int = 3) -> requests.Session:
     s = requests.Session()
-    retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
+    retry = Retry(total=total_retries, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
     s.mount("https://", HTTPAdapter(max_retries=retry))
     s.mount("http://", HTTPAdapter(max_retries=retry))
     return s
 
 _SESSION = _make_session()
+_NO_RETRY_SESSION = _make_session(total_retries=0)
 
 # ── AWS clients ───────────────────────────────────────────────────────────────
 s3 = boto3.client("s3")
@@ -150,22 +153,53 @@ def _prom_query(q: str):
     if not PROM_URL:
         return {"skipped": True, "reason": "PROMETHEUS_QUERY_URL not set"}
     try:
-        url = f"{PROM_URL.rstrip('/')}/api/v1/query"
-        r = _SESSION.get(url, params={"query": q}, timeout=10)
+        proxy_target = _prometheus_proxy_target(PROM_URL)
+        if proxy_target:
+            r = _prom_query_via_k8s_proxy(q, proxy_target)
+        else:
+            url = f"{PROM_URL.rstrip('/')}/api/v1/query"
+            r = _SESSION.get(url, params={"query": q}, timeout=10)
         r.raise_for_status()
         return r.json()
     except requests.RequestException as exc:
         return {"error": str(exc)}
 
 
+def _prometheus_proxy_target(url: str):
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    parts = host.split(".")
+    if len(parts) >= 3 and parts[2] == "svc":
+        return {
+            "scheme": parsed.scheme or "http",
+            "service": parts[0],
+            "namespace": parts[1],
+            "port": parsed.port or (443 if parsed.scheme == "https" else 80),
+        }
+    return None
+
+
+def _request_signer_credentials(session):
+    creds = session.get_credentials()
+    if hasattr(creds, "get_frozen_credentials"):
+        creds = creds.get_frozen_credentials()
+    return Credentials(
+        creds.access_key,
+        creds.secret_key,
+        creds.token,
+        getattr(creds, "method", None),
+    )
+
+
 def _eks_token(cluster_name: str) -> str:
     session = botocore.session.get_session()
-    creds = session.get_credentials().get_frozen_credentials()
+    sts_model = session.get_service_model("sts")
     signer = RequestSigner(
-        service_id="sts",
+        service_id=sts_model.service_id,
         region_name=AWS_REGION,
-        signing_version="v4",
-        credentials=creds,
+        signing_name=sts_model.signing_name,
+        signature_version="v4",
+        credentials=_request_signer_credentials(session),
         event_emitter=session.get_component("event_emitter"),
     )
     params = {
@@ -191,6 +225,27 @@ def _k8s_get(endpoint: str, token: str, path: str, ca_path: str):
     r = _SESSION.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=10, verify=ca_path)
     r.raise_for_status()
     return r.json()
+
+
+def _prom_query_via_k8s_proxy(q: str, target: dict):
+    if not CLUSTER_NAME:
+        raise requests.RequestException("CLUSTER_NAME is required for in-cluster Prometheus proxying")
+    endpoint, ca = _k8s_api(CLUSTER_NAME)
+    ca_path = f"/tmp/{COMPONENT}-prom-ca.crt"  # nosec B108 — /tmp is the writable Lambda path
+    with open(ca_path, "wb") as f:
+        f.write(ca)
+    token = _eks_token(CLUSTER_NAME)
+    proxy_path = (
+        f"/api/v1/namespaces/{target['namespace']}/services/"
+        f"{target['scheme']}:{target['service']}:{target['port']}/proxy/api/v1/query"
+    )
+    return _NO_RETRY_SESSION.get(
+        endpoint.rstrip("/") + proxy_path,
+        headers={"Authorization": f"Bearer {token}"},
+        params={"query": q},
+        timeout=4,
+        verify=ca_path,
+    )
 
 
 def _extract_webhook_secret(headers: dict) -> str:

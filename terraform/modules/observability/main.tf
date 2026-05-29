@@ -17,6 +17,11 @@ variable "webhook_secret" {
   sensitive   = true
   description = "Shared secret. Sent as Authorization: Bearer <secret>; signal_collector also accepts x-webhook-secret."
 }
+variable "prometheus_node_port" {
+  type        = number
+  default     = 30090
+  description = "Fixed NodePort used for the private Prometheus load balancer path."
+}
 
 locals {
   grafana_service_account = "kube-prometheus-stack-grafana"
@@ -213,6 +218,13 @@ resource "helm_release" "observability" {
           defaultRegion = var.aws_region
         }
       }]
+    }
+
+    prometheus = {
+      service = {
+        type     = "NodePort"
+        nodePort = var.prometheus_node_port
+      }
     }
   }))]
 

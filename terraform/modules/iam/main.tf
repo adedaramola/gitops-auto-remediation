@@ -1,6 +1,17 @@
+variable "aws_region" { type = string }
+variable "model_provider" { type = string }
+variable "bedrock_model_id" { type = string }
+variable "cluster_arn" { type = string }
 variable "project_name" { type = string }
 variable "incident_bucket_arn" { type = string }
 variable "event_bus_arn" { type = string }
+variable "incidents_table_arn" { type = string }
+variable "audit_table_arn" { type = string }
+variable "github_token_secret_arn" { type = string }
+variable "openai_secret_arn" {
+  type    = string
+  default = ""
+}
 
 # ── Trust policies ────────────────────────────────────────────────────────────
 data "aws_iam_policy_document" "assume_lambda" {
@@ -93,6 +104,18 @@ locals {
     action_planner    = aws_iam_role.action_planner.name
     confidence_scorer = aws_iam_role.confidence_scorer.name
   }
+
+  vpc_lambda_roles = {
+    signal_collector  = aws_iam_role.signal_collector.name
+    outcome_validator = aws_iam_role.outcome_validator.name
+  }
+
+  bedrock_model_arns = var.model_provider == "bedrock" ? [
+    "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.bedrock_model_id}"
+  ] : []
+  openai_secret_arns = var.openai_secret_arn != "" ? [var.openai_secret_arn] : []
+  github_secret_arns = var.github_token_secret_arn != "" ? [var.github_token_secret_arn] : []
+  llm_secret_arns    = var.model_provider == "openai" ? local.openai_secret_arns : []
 }
 
 resource "aws_iam_role_policy_attachment" "basic" {
@@ -105,6 +128,12 @@ resource "aws_iam_role_policy_attachment" "xray" {
   for_each   = local.lambda_roles
   role       = each.value
   policy_arn = "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
+}
+
+resource "aws_iam_role_policy_attachment" "vpc_access" {
+  for_each   = local.vpc_lambda_roles
+  role       = each.value
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
 resource "aws_iam_role_policy" "lambda_cloudwatch_metrics" {
@@ -128,8 +157,8 @@ resource "aws_iam_role_policy" "signal_collector_inline" {
     Statement = [
       { Effect = "Allow", Action = ["s3:PutObject", "s3:PutObjectAcl"], Resource = ["${var.incident_bucket_arn}/*"] },
       { Effect = "Allow", Action = ["events:PutEvents"], Resource = [var.event_bus_arn] },
-      { Effect = "Allow", Action = ["dynamodb:PutItem", "dynamodb:GetItem"], Resource = ["*"] },
-      { Effect = "Allow", Action = ["eks:DescribeCluster"], Resource = ["*"] }
+      { Effect = "Allow", Action = ["dynamodb:PutItem"], Resource = [var.incidents_table_arn] },
+      { Effect = "Allow", Action = ["eks:DescribeCluster"], Resource = [var.cluster_arn] }
     ]
   })
 }
@@ -139,12 +168,18 @@ resource "aws_iam_role_policy" "decision_engine_inline" {
   role = aws_iam_role.decision_engine.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      { Effect = "Allow", Action = ["s3:GetObject"], Resource = ["${var.incident_bucket_arn}/*"] },
-      { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = ["*"] },
-      { Effect = "Allow", Action = ["bedrock:InvokeModel"], Resource = ["*"] },
-      { Effect = "Allow", Action = ["dynamodb:PutItem", "dynamodb:UpdateItem"], Resource = ["*"] }
-    ]
+    Statement = concat(
+      [
+        { Effect = "Allow", Action = ["s3:GetObject"], Resource = ["${var.incident_bucket_arn}/*"] },
+        { Effect = "Allow", Action = ["dynamodb:PutItem"], Resource = [var.audit_table_arn] }
+      ],
+      length(concat(local.github_secret_arns, local.llm_secret_arns)) > 0 ? [
+        { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = concat(local.github_secret_arns, local.llm_secret_arns) }
+      ] : [],
+      length(local.bedrock_model_arns) > 0 ? [
+        { Effect = "Allow", Action = ["bedrock:InvokeModel"], Resource = local.bedrock_model_arns }
+      ] : [],
+    )
   })
 }
 
@@ -153,11 +188,16 @@ resource "aws_iam_role_policy" "outcome_validator_inline" {
   role = aws_iam_role.outcome_validator.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      { Effect = "Allow", Action = ["events:PutEvents"], Resource = [var.event_bus_arn] },
-      { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = ["*"] },
-      { Effect = "Allow", Action = ["dynamodb:PutItem", "dynamodb:UpdateItem"], Resource = ["*"] }
-    ]
+    Statement = concat(
+      [
+        { Effect = "Allow", Action = ["events:PutEvents"], Resource = [var.event_bus_arn] },
+        { Effect = "Allow", Action = ["dynamodb:PutItem"], Resource = [var.audit_table_arn] },
+        { Effect = "Allow", Action = ["eks:DescribeCluster"], Resource = [var.cluster_arn] }
+      ],
+      length(local.github_secret_arns) > 0 ? [
+        { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = local.github_secret_arns }
+      ] : [],
+    )
   })
 }
 
@@ -167,11 +207,17 @@ resource "aws_iam_role_policy" "classifier_inline" {
   role = aws_iam_role.classifier_agent.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      { Effect = "Allow", Action = ["s3:GetObject"], Resource = ["${var.incident_bucket_arn}/*"] },
-      { Effect = "Allow", Action = ["bedrock:InvokeModel"], Resource = ["*"] },
-      { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = ["*"] }
-    ]
+    Statement = concat(
+      [
+        { Effect = "Allow", Action = ["s3:GetObject"], Resource = ["${var.incident_bucket_arn}/*"] }
+      ],
+      length(local.bedrock_model_arns) > 0 ? [
+        { Effect = "Allow", Action = ["bedrock:InvokeModel"], Resource = local.bedrock_model_arns }
+      ] : [],
+      length(local.llm_secret_arns) > 0 ? [
+        { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = local.llm_secret_arns }
+      ] : [],
+    )
   })
 }
 
@@ -180,11 +226,17 @@ resource "aws_iam_role_policy" "root_cause_inline" {
   role = aws_iam_role.root_cause_agent.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      { Effect = "Allow", Action = ["s3:GetObject"], Resource = ["${var.incident_bucket_arn}/*"] },
-      { Effect = "Allow", Action = ["bedrock:InvokeModel"], Resource = ["*"] },
-      { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = ["*"] }
-    ]
+    Statement = concat(
+      [
+        { Effect = "Allow", Action = ["s3:GetObject"], Resource = ["${var.incident_bucket_arn}/*"] }
+      ],
+      length(local.bedrock_model_arns) > 0 ? [
+        { Effect = "Allow", Action = ["bedrock:InvokeModel"], Resource = local.bedrock_model_arns }
+      ] : [],
+      length(local.llm_secret_arns) > 0 ? [
+        { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = local.llm_secret_arns }
+      ] : [],
+    )
   })
 }
 
@@ -193,11 +245,17 @@ resource "aws_iam_role_policy" "action_planner_inline" {
   role = aws_iam_role.action_planner.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      { Effect = "Allow", Action = ["s3:GetObject"], Resource = ["${var.incident_bucket_arn}/*"] },
-      { Effect = "Allow", Action = ["bedrock:InvokeModel"], Resource = ["*"] },
-      { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = ["*"] }
-    ]
+    Statement = concat(
+      [
+        { Effect = "Allow", Action = ["s3:GetObject"], Resource = ["${var.incident_bucket_arn}/*"] }
+      ],
+      length(local.bedrock_model_arns) > 0 ? [
+        { Effect = "Allow", Action = ["bedrock:InvokeModel"], Resource = local.bedrock_model_arns }
+      ] : [],
+      length(concat(local.github_secret_arns, local.llm_secret_arns)) > 0 ? [
+        { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = concat(local.github_secret_arns, local.llm_secret_arns) }
+      ] : [],
+    )
   })
 }
 

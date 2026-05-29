@@ -119,8 +119,8 @@ resource "aws_sfn_state_machine" "multi_agent" {
       RemediationFallback = {
         Type = "Pass"
         Parameters = {
-          action    = "restart_rollout"
-          params    = {}
+          action = "restart_rollout"
+          params = {}
           "target" = {
             "service.$" = "$.service"
             "env.$"     = "$.env"

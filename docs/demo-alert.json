@@ -1,0 +1,39 @@
+{
+  "receiver": "gitops-sentinel",
+  "status": "firing",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "HighHTTP5xxErrorRate",
+        "service": "demo-service",
+        "namespace": "default",
+        "env": "staging",
+        "severity": "critical"
+      },
+      "annotations": {
+        "summary": "demo-service is returning elevated 5xx responses",
+        "description": "Synthetic MVP demo alert for GitOps Sentinel."
+      },
+      "startsAt": "2026-05-29T12:00:00Z"
+    }
+  ],
+  "groupLabels": {
+    "alertname": "HighHTTP5xxErrorRate",
+    "service": "demo-service"
+  },
+  "commonLabels": {
+    "alertname": "HighHTTP5xxErrorRate",
+    "service": "demo-service",
+    "namespace": "default",
+    "env": "staging",
+    "severity": "critical"
+  },
+  "commonAnnotations": {
+    "summary": "demo-service is returning elevated 5xx responses",
+    "description": "Synthetic MVP demo alert for GitOps Sentinel."
+  },
+  "version": "4",
+  "groupKey": "{}:{alertname=\"HighHTTP5xxErrorRate\",service=\"demo-service\"}",
+  "truncatedAlerts": 0
+}

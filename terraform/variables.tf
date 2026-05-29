@@ -62,6 +62,18 @@ variable "model_provider" {
   default = "bedrock"
 }
 
+variable "bedrock_model_id" {
+  type        = string
+  default     = "anthropic.claude-3-haiku-20240307-v1:0"
+  description = "Foundation model ID used when model_provider = \"bedrock\"."
+}
+
+variable "openai_secret_arn" {
+  type        = string
+  default     = ""
+  description = "Optional Secrets Manager ARN containing the OpenAI API key JSON payload."
+}
+
 
 # Networking / EKS
 variable "cluster_name" {
@@ -99,6 +111,12 @@ variable "prometheus_query_url" {
   type        = string
   default     = ""
   description = "Optional Prometheus query URL (e.g., https://prom.example.com). Used by Signal Collector and Outcome Validator."
+}
+
+variable "enable_private_prometheus_endpoint" {
+  type        = bool
+  default     = false
+  description = "When true, exposes Prometheus on a private VPC-only load balancer and attaches telemetry Lambdas to the VPC."
 }
 
 # EKS cluster context for k8s read-only queries from Lambda (optional)

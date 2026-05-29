@@ -17,11 +17,20 @@ variable "enable_multi_agent" {
   default = false
 }
 variable "audit_table_name" { type = string }
+variable "subnet_ids" {
+  type    = list(string)
+  default = []
+}
+variable "security_group_ids" {
+  type    = list(string)
+  default = []
+}
 
-data "archive_file" "zip" {
-  type        = "zip"
-  source_dir  = "${path.module}/src"
-  output_path = "${path.module}/function.zip"
+module "package" {
+  source            = "../lambda_package"
+  function_name     = "signal_collector"
+  source_dir        = "${path.root}/../lambdas/signal_collector"
+  requirements_file = "${path.root}/../lambdas/requirements.txt"
 }
 
 resource "aws_lambda_function" "this" {
@@ -30,13 +39,21 @@ resource "aws_lambda_function" "this" {
   runtime                        = "python3.12"
   architectures                  = ["arm64"]
   handler                        = "app.handler"
-  filename                       = data.archive_file.zip.output_path
-  source_code_hash               = data.archive_file.zip.output_base64sha256
+  filename                       = module.package.filename
+  source_code_hash               = module.package.source_code_hash
   timeout                        = 60
   reserved_concurrent_executions = 10
 
   tracing_config {
     mode = "Active"
+  }
+
+  dynamic "vpc_config" {
+    for_each = length(var.subnet_ids) > 0 && length(var.security_group_ids) > 0 ? [1] : []
+    content {
+      subnet_ids         = var.subnet_ids
+      security_group_ids = var.security_group_ids
+    }
   }
 
   environment {

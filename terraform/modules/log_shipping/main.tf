@@ -96,11 +96,11 @@ resource "helm_release" "fluent_bit" {
     }
 
     cloudWatchLogs = {
-      enabled         = true
-      region          = var.aws_region
-      logGroupName    = aws_cloudwatch_log_group.pod_logs.name
-      logStreamPrefix = "fluentbit-"
-      autoCreateGroup = false
+      enabled          = true
+      region           = var.aws_region
+      logGroupName     = aws_cloudwatch_log_group.pod_logs.name
+      logStreamPrefix  = "fluentbit-"
+      autoCreateGroup  = false
       logRetentionDays = var.log_retention_days
     }
 
@@ -117,9 +117,9 @@ resource "helm_release" "fluent_bit" {
 
     # Include K8s metadata (pod name, namespace, labels, annotations) for correlation.
     input = {
-      tag                = "kube.*"
-      memBufLimit        = "5MB"
-      readFromHead       = "Off"
+      tag          = "kube.*"
+      memBufLimit  = "5MB"
+      readFromHead = "Off"
     }
 
     filter = {

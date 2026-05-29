@@ -69,6 +69,15 @@ tf-destroy: ## terraform destroy (prompts for confirmation)
 tf-validate: ## Validate Terraform configuration
 	cd $(TF_DIR) && terraform validate
 
+# ── Demo helpers ──────────────────────────────────────────────────────────────
+.PHONY: demo-alert
+demo-alert: ## POST docs/demo-alert.json to $$WEBHOOK_URL (optional $$WEBHOOK_SECRET)
+	@test -n "$$WEBHOOK_URL" || (echo "Set WEBHOOK_URL to your Terraform output first." && exit 1)
+	curl -sS -X POST "$$WEBHOOK_URL" \
+		-H "Content-Type: application/json" \
+		$$(test -n "$$WEBHOOK_SECRET" && printf '%s' "-H X-Webhook-Secret: $$WEBHOOK_SECRET") \
+		--data @docs/demo-alert.json
+
 # ── Lambda sync ───────────────────────────────────────────────────────────────
 .PHONY: sync-lambda
 sync-lambda: ## Copy lambdas/*/app.py → terraform/modules/lambda_*/src/app.py

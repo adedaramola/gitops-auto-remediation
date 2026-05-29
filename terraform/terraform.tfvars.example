@@ -21,10 +21,11 @@ github_token_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:
 
 # bedrock (default) or openai
 model_provider = "bedrock"
+bedrock_model_id = "anthropic.claude-3-haiku-20240307-v1:0"
 
 # Only required when model_provider = "openai"
 # ARN of a Secrets Manager secret containing: {"api_key":"sk-..."}
-# openai_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:openai-key-xxxxxx"
+openai_secret_arn = ""
 
 # ─── Networking ───────────────────────────────────────────────────────────────
 
@@ -36,7 +37,8 @@ az_count  = 2
 # URL for Prometheus query API (reachable from Lambda VPC).
 # For self-managed Prometheus on EKS, expose via an internal load balancer.
 # For Amazon Managed Prometheus (AMP), see docs/amp-guidance.md.
-prometheus_query_url = ""  # e.g. "http://prometheus-operated.monitoring.svc.cluster.local:9090"
+prometheus_query_url = ""
+enable_private_prometheus_endpoint = true
 
 # Allow Bundler Lambda to read Kubernetes events and deployment status.
 enable_k8s_readonly_enrichment = true
