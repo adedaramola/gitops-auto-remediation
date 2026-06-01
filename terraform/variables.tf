@@ -23,8 +23,8 @@ variable "enable_log_encryption" {
 
 variable "environment" {
   type        = string
-  default     = "Dev"
-  description = "Deployment environment. One of: Dev, Stage, Prod."
+  default     = "Stage"
+  description = "Deployment environment tag. One of: Dev, Stage, Prod. Defaults to Stage because the MVP demo flow targets the staging GitOps overlay."
   validation {
     condition     = contains(["Dev", "Stage", "Prod"], var.environment)
     error_message = "environment must be Dev, Stage, or Prod."
@@ -51,6 +51,12 @@ variable "github_repo" {
   type = string
 }
 
+variable "gitops_repo_revision" {
+  type        = string
+  default     = "main"
+  description = "Git revision Argo CD should sync for the demo applications."
+}
+
 # Store a GitHub token or GitHub App installation token JSON in Secrets Manager
 variable "github_token_secret_arn" {
   type = string
@@ -60,6 +66,10 @@ variable "github_token_secret_arn" {
 variable "model_provider" {
   type    = string
   default = "bedrock"
+  validation {
+    condition     = contains(["bedrock", "openai"], var.model_provider)
+    error_message = "model_provider must be either bedrock or openai."
+  }
 }
 
 variable "bedrock_model_id" {
@@ -72,6 +82,10 @@ variable "openai_secret_arn" {
   type        = string
   default     = ""
   description = "Optional Secrets Manager ARN containing the OpenAI API key JSON payload."
+  validation {
+    condition     = var.model_provider != "openai" || trim(var.openai_secret_arn) != ""
+    error_message = "openai_secret_arn must be set when model_provider is openai."
+  }
 }
 
 
@@ -95,6 +109,18 @@ variable "az_count" {
 variable "enable_api_gateway" {
   type    = bool
   default = true
+}
+
+variable "bootstrap_argocd_applications" {
+  type        = bool
+  default     = true
+  description = "When true, Terraform creates the Argo CD Application resources for demo-staging, demo-prod, and platform-policies."
+}
+
+variable "kubernetes_api_ready_wait" {
+  type        = string
+  default     = "45s"
+  description = "Extra wait after EKS creation before Helm/Kubernetes resources are applied. Helps avoid Unauthorized races on fresh clusters."
 }
 
 # Optional: Amazon Managed Service for Prometheus (AMP) for outcome_validator queries

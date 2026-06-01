@@ -4,6 +4,7 @@
 # ─── Required ─────────────────────────────────────────────────────────────────
 
 aws_region   = "us-east-1"
+environment  = "Stage"
 project_name = "ai-gitops-Self-Healing"
 cluster_name = "ai-gitops-Cluster"
 
@@ -12,6 +13,16 @@ github_owner = "YOUR_ORG_OR_USER"
 
 # Name of the GitOps repository
 github_repo = "YOUR_REPO"
+
+# Git revision Argo CD should sync for the demo applications
+gitops_repo_revision = "main"
+
+# Have Terraform create the demo-staging/demo-prod/platform-policies Applications
+bootstrap_argocd_applications = true
+
+# Extra wait after EKS creation before Kubernetes/Helm resources are applied.
+# Keep the default unless you have a reason to shorten it.
+kubernetes_api_ready_wait = "45s"
 
 # ARN of a Secrets Manager secret containing: {"token":"ghp_..."}
 # Minimum token scopes: contents:write, pull_requests:write
@@ -54,3 +65,8 @@ slack_webhook_url = ""  # e.g. "https://hooks.slack.com/services/T00/B00/xxxx"
 # Configure Alertmanager to send header: X-Webhook-Secret: <this value>
 # Generate a strong value with: openssl rand -hex 32
 webhook_secret = "REPLACE_WITH_openssl_rand_hex_32_output"
+
+# Multi-agent mode gives the fullest story, but only use it when the model
+# provider is confirmed working. For the most repeatable fallback demo, set
+# this to false and use the single decision_engine path.
+enable_multi_agent = false

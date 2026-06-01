@@ -67,12 +67,26 @@ module "eks" {
   }
 }
 
+# Fresh EKS clusters can report ACTIVE before the API server consistently accepts
+# the creator token. This wait makes Helm/Kubernetes resources much less likely
+# to race cluster access propagation on clean demo deployments.
+resource "time_sleep" "kubernetes_api_ready" {
+  depends_on      = [module.eks]
+  create_duration = var.kubernetes_api_ready_wait
+}
+
 ########################
 # GitOps & Observability (Helm)
 ########################
 module "argocd" {
-  source       = "./modules/argocd"
-  project_name = local.name
+  source                 = "./modules/argocd"
+  project_name           = local.name
+  github_owner           = var.github_owner
+  github_repo            = var.github_repo
+  gitops_repo_revision   = var.gitops_repo_revision
+  bootstrap_applications = var.bootstrap_argocd_applications
+
+  depends_on = [time_sleep.kubernetes_api_ready]
 }
 
 module "observability" {
@@ -86,6 +100,8 @@ module "observability" {
   webhook_secret       = var.webhook_secret
   alarm_actions        = var.alarm_actions
   prometheus_node_port = local.prometheus_private_node_port
+
+  depends_on = [aws_cloudwatch_log_group.lambda_logs, time_sleep.kubernetes_api_ready]
 }
 
 module "log_shipping" {
@@ -97,11 +113,15 @@ module "log_shipping" {
   oidc_provider      = replace(module.eks.cluster_oidc_issuer_url, "https://", "")
   log_retention_days = var.log_retention_days
   kms_key_arn        = local.kms_log_key_arn
+
+  depends_on = [time_sleep.kubernetes_api_ready]
 }
 
 module "gatekeeper" {
   source       = "./modules/gatekeeper"
   project_name = local.name
+
+  depends_on = [time_sleep.kubernetes_api_ready]
 }
 
 resource "aws_security_group" "telemetry_lambdas" {
@@ -261,6 +281,8 @@ resource "kubernetes_role_v1" "prometheus_proxy_reader" {
     resources  = ["services/proxy", "pods/proxy"]
     verbs      = ["get"]
   }
+
+  depends_on = [time_sleep.kubernetes_api_ready, module.observability]
 }
 
 resource "kubernetes_role_binding_v1" "prometheus_proxy_reader" {
@@ -282,6 +304,8 @@ resource "kubernetes_role_binding_v1" "prometheus_proxy_reader" {
     name      = local.prometheus_proxy_group
     api_group = "rbac.authorization.k8s.io"
   }
+
+  depends_on = [time_sleep.kubernetes_api_ready, module.observability, kubernetes_role_v1.prometheus_proxy_reader]
 }
 
 ########################
@@ -334,6 +358,7 @@ module "decision_engine_lambda" {
   source                  = "./modules/lambda_decision_engine"
   project_name            = local.name
   role_arn                = module.iam.decision_engine_role_arn
+  event_bus_name          = module.eventing.event_bus_name
   github_owner            = var.github_owner
   github_repo             = var.github_repo
   github_token_secret_arn = var.github_token_secret_arn
