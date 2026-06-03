@@ -23,12 +23,12 @@ Signal Collector Lambda
     ├── S3 PUT  →  incidents/<incident_id>.json
     └── EventBridge PUT
             ├── SignalBundled         →  Decision Engine Lambda (single-agent path)
-            └── AutoRemediationPipelineTriggered  →  Step Functions (multi-agent path)
+            └── SentinelPipelineTriggered  →  Step Functions (multi-agent path)
 
 Decision Engine Lambda (single-agent)
     ├── Reads signal bundle from S3
     ├── Fetches allowed-actions.yaml from GitHub
-    ├── Calls Bedrock (Claude Haiku) or falls back to heuristic
+    ├── Calls Bedrock/OpenAI or falls back to heuristic
     ├── Checks for existing PR (idempotency)
     ├── Opens GitHub PR with patch
     └── Writes action_dispatched record to DynamoDB Audit Log
@@ -39,7 +39,7 @@ Step Functions — Auto-Remediation Pipeline (multi-agent)
     ├── ActionPlanner     →  proposed action + alternatives
     ├── ConfidenceScorer  →  deterministic scoring + penalty model
     └── RouteByConfidence
-            ├── ≥80 + low risk  →  auto_apply  (opens the fast-track PR path)
+            ├── ≥80 + low risk  →  auto_apply  (invokes the Decision Engine PR path)
             ├── 40–79           →  open_pr     (human review)
             └── <40             →  escalate    (PagerDuty / Slack)
 
@@ -61,7 +61,7 @@ Outcome Validator Lambda
 | Confidence-gated routing | System knows when it is certain enough to act autonomously vs when to ask a human |
 | DynamoDB dedup | Prevents alert storms from triggering N identical remediations for the same incident |
 | Heuristic fallback | If Bedrock is unavailable or returns an invalid response, a deterministic fallback runs — the system degrades gracefully |
-| GitHub App token cache | Token refreshed every 5 minutes via Secrets Manager — avoids per-invocation API calls |
+| GitHub token cache | Token refreshed every 5 minutes via Secrets Manager — avoids per-invocation API calls |
 | Separate IAM roles per Lambda | Least-privilege; each function only has the permissions it needs |
 
 ---
@@ -94,6 +94,7 @@ Outcome Validator Lambda
 │       ├── lambda_root_cause_agent/
 │       ├── lambda_action_planner/
 │       ├── lambda_confidence_scorer/
+│       ├── lambda_package/
 │       ├── dynamodb_audit_log/
 │       ├── dynamodb_incidents/
 │       ├── eventbridge/
@@ -104,6 +105,7 @@ Outcome Validator Lambda
 │       ├── s3_incidents/
 │       ├── argocd/
 │       ├── gatekeeper/
+│       ├── log_shipping/
 │       └── observability/
 │
 ├── gitops/
@@ -133,7 +135,7 @@ Outcome Validator Lambda
 - kubectl >= 1.28, Helm >= 3.12
 - Argo CD CLI (`brew install argocd`)
 - GitHub CLI (`brew install gh`)
-- Python 3.11
+- Python 3.12
 - Helm repos added:
   ```bash
   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
@@ -352,7 +354,7 @@ For Amazon Managed Prometheus (AMP), see `docs/amp-guidance.md` — SigV4 signin
 
 ### Enabling the multi-agent pipeline
 
-The Step Functions pipeline runs in parallel with the single-agent path when `ENABLE_MULTI_AGENT=true` is set on the Signal Collector Lambda (controlled by `enable_multi_agent = true` in tfvars).
+When `ENABLE_MULTI_AGENT=true` is set on the Signal Collector Lambda (controlled by `enable_multi_agent = true` in tfvars), the Signal Collector emits `SentinelPipelineTriggered` instead of `SignalBundled`, routing that incident through Step Functions instead of the single-agent Decision Engine path.
 
 **Confidence scoring model:**
 ```
@@ -396,7 +398,7 @@ Each Lambda has its own role (`${project_name}-{component}`) with a minimum-priv
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `validate-pr.yaml` | PR touching `gitops/**`, `lambdas/**`, `terraform/**` | `kustomize build` both clusters + `pytest tests/ -v` |
+| `validate-pr.yaml` | PR touching `gitops/**`, `observability/**`, `lambdas/**`, `terraform/**` | `kustomize build` both clusters, Lambda source sync check, `terraform validate`, `tflint`, `bandit`, and unit tests |
 | `policy-check.yaml` | PR touching `gitops/**` | Validates replica count in kustomize overlay doesn't exceed `allowed-actions.yaml` max |
 | `notify-action-dispatched.yaml` | Push to `main` with `gitops/**` changes | Extracts `inc-*` from commit message, fires `ActionDispatched` to EventBridge |
 
@@ -423,14 +425,14 @@ The `notify-action-dispatched.yaml` workflow bridges GitHub (where the PR merge 
 
 | Gap | Impact | Recommended fix |
 |---|---|---|
-| Lambda dependencies installed manually into `src/` | Fragile in CI — any `terraform apply` from a clean checkout will fail | Replace with `null_resource` + `local-exec` pip install, or a Lambda Layer |
+| Lambda packaging runs locally during `terraform apply` | Deployments depend on the operator machine having working `python3`, `pip`, and dependency download access | Move packaging to CI-built artifacts or a dedicated build pipeline if you need more reproducible deploys |
 | IAM resource ARNs use `*` for DynamoDB and Bedrock | Over-permissive | Tighten to specific ARNs in the IAM module |
-| `prometheus_query_url` is empty by default | Outcome Validator skips recovery check, always marks `OutcomeValidated` | Connect real Prometheus or AMP |
+| `prometheus_query_url` is empty by default | Outcome Validator cannot verify recovery and will emit `OutcomeFailed` until Prometheus is reachable | Connect real Prometheus or AMP |
 | Gatekeeper ConstraintTemplate must be synced before Constraint | Manual step required on fresh Argo CD setup | Add Argo CD sync waves via `argocd.argoproj.io/sync-wave` annotations |
 | No Alertmanager integration test | You have to fire test alerts manually | Add a `make test-alert` Makefile target or a test receiver in Alertmanager config |
 | GitHub PAT is a long-lived credential | Security risk | Migrate to GitHub App installation token flow (token cache already implemented in Decision Engine) |
 | Lambda token cache (5-min TTL) not invalidated when Secrets Manager is updated | After rotating a PAT, the Lambda serves stale credentials for up to 5 minutes | Force a cold start immediately by updating any env var: `aws lambda update-function-configuration --function-name gitops-auto-remediation-decision-engine --environment "$(aws lambda get-function-configuration --function-name gitops-auto-remediation-decision-engine --query 'Environment' --output json \| python3 -c "import json,sys,time; e=json.load(sys.stdin); e['Variables']['CACHE_BUST']=str(time.time()); print(json.dumps(e))")"` |
-| Terraform `archive_file` data source does not reliably detect changes to `src/` directory contents | `terraform apply` reports `0 changes` after adding pip deps — Lambda runs stale code | Re-upload manually: `cd terraform/modules/lambda_{name}/src && zip -r /tmp/fn.zip . && aws lambda update-function-code --function-name gitops-auto-remediation-{name} --zip-file fileb:///tmp/fn.zip`. Long-term fix: use `null_resource` with `local-exec` and a `triggers` hash of the src directory |
+| `lambdas/*/app.py` and `terraform/modules/lambda_*/src/app.py` can drift | CI fails the sync check, and contributors may be unsure which source tree is authoritative | Run `make sync-lambda` after changing Lambda code and commit both paths |
 | `allowed-actions.yaml` must not be listed in `gitops/policies/kustomization.yaml` as a resource | It is a Lambda config file, not a Kubernetes manifest — kustomize will reject it with `missing Resource metadata` | Only Gatekeeper manifests belong in that kustomization's `resources:` list. `allowed-actions.yaml` is fetched directly from GitHub by the Decision Engine at runtime via the GitHub Contents API |
 
 ---

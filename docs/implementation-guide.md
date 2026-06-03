@@ -9,7 +9,7 @@ This guide walks you through deploying GitOps Auto-Remediation from scratch. Fol
 GitOps Auto-Remediation is a self-healing infrastructure platform. When a production alert fires (e.g. high error rate), the system:
 
 1. Receives the alert via webhook
-2. Analyses it using an AI agent (AWS Bedrock)
+2. Analyses it using an AI agent (AWS Bedrock by default, OpenAI optional)
 3. Proposes a remediation (e.g. scale replicas) as a **GitHub Pull Request**
 4. After the PR is merged, Argo CD applies the change to the Kubernetes cluster
 5. The Outcome Validator checks if the service recovered
@@ -23,10 +23,10 @@ GitOps Auto-Remediation is a self-healing infrastructure platform. When a produc
 ```
 Alertmanager → API Gateway → Signal Collector Lambda
                                       ↓
-                               EventBridge (SignalBundled)
-                                      ↓
-                           Decision Engine Lambda (Bedrock)
-                                      ↓
+                 EventBridge (SignalBundled or SentinelPipelineTriggered)
+                         ↙ single-agent                    ↘ multi-agent
+      Decision Engine Lambda (Bedrock/OpenAI)      Step Functions pipeline
+                         ↓                                   ↓
                               GitHub Pull Request
                                       ↓
                            GitHub Actions (CI checks)
@@ -53,7 +53,7 @@ Before you start, make sure you have the following installed and configured on y
 | Helm | >= 3.12 | https://helm.sh/docs/intro/install/ |
 | Argo CD CLI | latest | `brew install argocd` |
 | GitHub CLI | latest | `brew install gh` |
-| Python | 3.11 | https://python.org/downloads |
+| Python | 3.12 | https://python.org/downloads |
 | Git | any | pre-installed on most systems |
 
 ### Accounts Required
@@ -123,9 +123,9 @@ You should see your AWS account ID and user ARN.
 The Lambda unit tests run locally. Set up a Python virtual environment:
 
 ```bash
-python3.11 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-pip install -r lambdas/requirements.txt
+pip install -r lambdas/requirements-dev.txt
 ```
 
 Run the tests to confirm everything is healthy before you deploy:
@@ -261,7 +261,7 @@ cd terraform
 # Initialise Terraform (downloads providers and modules)
 terraform init
 
-# Preview what will be created (120 resources)
+# Preview what will be created
 terraform plan
 
 # Deploy everything
@@ -309,8 +309,8 @@ kubectl get nodes
 Expected output:
 ```
 NAME                           STATUS   ROLES    AGE   VERSION
-ip-10-20-x-x.ec2.internal      Ready    <none>   5m    v1.33.x-eks-xxxxx
-ip-10-20-x-x.ec2.internal      Ready    <none>   5m    v1.33.x-eks-xxxxx
+ip-10-20-x-x.ec2.internal      Ready    <none>   5m    v1.34.x-eks-xxxxx
+ip-10-20-x-x.ec2.internal      Ready    <none>   5m    v1.34.x-eks-xxxxx
 ```
 
 If nodes show `NotReady`, wait another 2–3 minutes and try again.
@@ -528,10 +528,9 @@ aws dynamodb scan \
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `No module named 'requests'` in Lambda logs | pip deps not bundled in zip | Re-run Step 7, then re-upload with `aws lambda update-function-code` |
+| `No module named 'requests'` in Lambda logs | Local Lambda packaging did not complete successfully during `terraform apply` | Re-run `terraform apply` after confirming `python3` and `pip` are available locally; packaging is handled by `terraform/scripts/build_lambda.sh` |
 | `GitHub API error 403` in Decision Engine logs | PAT doesn't have `repo` scope | Create a new classic PAT with full `repo` scope, update Secrets Manager |
 | `GitHub API error 403` after updating PAT | Lambda has cached the old token (5-min TTL) | Force a cold start by updating any env var on the Lambda: `aws lambda update-function-configuration --function-name gitops-auto-remediation-decision-engine --environment "$(aws lambda get-function-configuration --function-name gitops-auto-remediation-decision-engine --query 'Environment' --output json \| python3 -c "import json,sys,time; e=json.load(sys.stdin); e['Variables']['CACHE_BUST']=str(time.time()); print(json.dumps(e))")"` then fire a new alert |
-| Terraform shows `0 changes` after adding deps to `src/` | Terraform's `archive_file` data source doesn't always detect directory changes | Re-upload the Lambda manually: `cd terraform/modules/lambda_signal_collector/src && zip -r /tmp/lambda.zip . && aws lambda update-function-code --function-name gitops-auto-remediation-signal-collector --zip-file fileb:///tmp/lambda.zip` — repeat for `decision_engine` and `outcome_validator` |
 | Argo CD app shows `ComparisonError: allowed-actions.yaml missing Resource metadata` | `allowed-actions.yaml` is a policy config file, not a Kubernetes manifest — it must not be listed as a kustomize resource | Check `gitops/policies/kustomization.yaml` — the `resources:` list should only contain `gatekeeper/constrainttemplate-deployment-bounds.yaml` and `gatekeeper/constraint-deployment-bounds.yaml`. Remove any reference to `allowed-actions.yaml` |
 | Argo CD app shows `ComparisonError` (other kustomize errors) | kustomize build fails | Run `kustomize build gitops/clusters/staging` locally to see the full error |
 | `K8sDeploymentBounds CRD not installed` on Argo CD sync | ConstraintTemplate not applied first | Run `argocd app sync demo-staging --resource templates.gatekeeper.sh:ConstraintTemplate:k8sdeploymentbounds` then full sync |

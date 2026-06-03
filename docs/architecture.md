@@ -22,7 +22,7 @@ sequenceDiagram
     SC->>DDB: Conditional PutItem (dedup check)
     DDB-->>SC: OK / ConditionalCheckFailed
     SC->>S3: PutObject (signal bundle JSON)
-    SC->>EB: PutEvents → SignalBundled or AutoRemediationPipelineTriggered
+    SC->>EB: PutEvents → SignalBundled or SentinelPipelineTriggered
 
     alt Single-agent path (enable_multi_agent=false)
         EB->>DE: Invoke Decision Engine
@@ -35,9 +35,9 @@ sequenceDiagram
         SF->>SF: ClassifierAgent → RootCauseAgent → ActionPlannerAgent → ConfidenceScorer
         SF->>SF: RouteByConfidence
         alt confidence ≥ 80 and risk = low
-            SF->>DE: Open fast-track PR
+            SF->>DE: Invoke Decision Engine (auto_apply route)
         else confidence 40-79
-            SF->>DE: Open PR for review
+            SF->>DE: Invoke Decision Engine (open_pr route)
         else confidence < 40
             SF->>SF: EscalateToHuman (page on-call)
         end
@@ -65,13 +65,13 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    A[SignalBundled / AutoRemediationPipelineTriggered] --> B[ClassifierAgent\nSeverity · BlastRadius · Priority]
+    A[SentinelPipelineTriggered] --> B[ClassifierAgent\nSeverity · BlastRadius · Priority]
     B --> C[RootCauseAgent\nRoot Cause · Contributing Factors\nDiagnosis Confidence 0-100]
     C --> D[ActionPlannerAgent\nProposed Action from allowed-actions.yaml\nAlternatives · Rationale]
     D --> E[ConfidenceScorer\nPure deterministic — no LLM\nBase = diagnosis_confidence\nPenalties: severity · blast_radius · action_type]
     E --> F{RouteByConfidence}
-    F -->|confidence ≥ 80\nrisk = low| G[Fast-Track PR\nOpened by Decision Engine]
-    F -->|confidence 40-79| H[Open PR\nEngineer reviews]
+    F -->|confidence ≥ 80\nrisk = low| G[auto_apply route\nDecision Engine PR path]
+    F -->|confidence 40-79| H[open_pr route\nDecision Engine PR path]
     F -->|confidence < 40| I[Escalate\nPage on-call\nNo cluster change]
 
     style G fill:#22c55e,color:#fff
@@ -102,13 +102,13 @@ sequenceDiagram
 ```mermaid
 graph LR
     SC[Signal Collector] -->|SignalBundled| EB[(EventBridge\ncustom bus)]
-    SC -->|AutoRemediationPipelineTriggered| EB
+    SC -->|SentinelPipelineTriggered| EB
     GH[GitHub Actions\nnotify-action-dispatched] -->|ActionDispatched| EB
     OV[Outcome Validator] -->|OutcomeValidated| EB
     OV -->|OutcomeFailed| EB
 
     EB -->|SignalBundled| DE
-    EB -->|AutoRemediationPipelineTriggered| SF[Step Functions]
+    EB -->|SentinelPipelineTriggered| SF[Step Functions]
     EB -->|ActionDispatched| OV
 
     EB --> DLQ[(SQS DLQ\n14-day retention)]

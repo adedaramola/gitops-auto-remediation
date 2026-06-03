@@ -31,7 +31,7 @@ See `docs/alertmanager-webhook.md` and set:
    - Decision Engine (or the multi-agent pipeline when enabled) opens a GitHub PR
    - CI passes on the PR
    - Merge PR → GitHub Actions emits `ActionDispatched` → Argo CD syncs cluster
-   - Outcome Validator queries Prometheus and emits `OutcomeValidated`
+   - Outcome Validator queries Prometheus and emits `OutcomeValidated` or `OutcomeFailed`
    - DynamoDB Audit Log has entries for `action_dispatched` and `outcome_validated`
 
 ## Common failure modes
@@ -39,7 +39,7 @@ See `docs/alertmanager-webhook.md` and set:
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Decision Engine can't open PR | GitHub token secret wrong format or missing permissions | Check secret JSON: `{ "token": "ghp_..." }`, ensure `contents:write` + `pull_requests:write` |
-| Outcome Validator skips Prometheus check | `PROMETHEUS_QUERY_URL` not set | Set `prometheus_query_url` in tfvars and redeploy |
+| Outcome Validator cannot verify recovery and emits `OutcomeFailed` | `PROMETHEUS_QUERY_URL` not set or not reachable | Set `prometheus_query_url` in tfvars, confirm the endpoint is reachable, and redeploy |
 | Gatekeeper rejects change | Action outside `allowed-actions.yaml` bounds | Expected — add action to the allowed list if intentional |
 | Signal dedup suppressing alerts | DynamoDB TTL not expired (30-min window) | Wait for TTL or manually delete the dedup record |
 | Step Functions pipeline stuck | Agent Lambda timeout | Check X-Ray trace for which state timed out; increase timeout or check Bedrock throttling |

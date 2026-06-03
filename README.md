@@ -20,11 +20,11 @@ GitOps Auto-Remediation is a confidence-gated remediation pipeline for Kubernete
 
 | Confidence | Action |
 |---|---|
-| ≥ 80 + low risk | Auto-apply: the PR is opened and merged automatically |
+| ≥ 80 + low risk | Auto-apply route: high-confidence remediation path |
 | 40 – 79 | Open PR: a human reviews before anything touches the cluster |
 | < 40 | Escalate: page on-call, no automated change |
 
-Every remediation is a Git commit. The cluster never changes outside of a pull request or a high-confidence auto-apply — Argo CD syncs the rest. If the fix makes things worse, the system detects it and opens a revert PR automatically.
+Every remediation is a Git commit. The cluster never changes outside of a GitOps pull request flow — Argo CD syncs the rest. If the fix makes things worse, the system detects it and opens a revert PR automatically.
 
 ---
 
@@ -109,9 +109,9 @@ Alertmanager / CloudWatch
    - **Single-agent** (`false`, default): Decision Engine reads the bundle, calls the LLM once, opens a GitHub PR. No confidence scoring. Designed for demos and cost-sensitive environments.
    - **Multi-agent** (`true`): Step Functions runs the full pipeline — Classifier → Root Cause → Action Planner → Confidence Scorer → RouteByConfidence.
 
-4. **Confidence routing** — The Confidence Scorer produces a deterministic score (no LLM call, no latency) by starting from the diagnosis confidence and applying penalties for severity, blast radius, and action risk type. The score determines the route: fast-track PR, open PR for review, or escalate to on-call.
+4. **Confidence routing** — The Confidence Scorer produces a deterministic score (no LLM call, no latency) by starting from the diagnosis confidence and applying penalties for severity, blast radius, and action risk type. The score determines the route: `auto_apply`, `open_pr`, or `escalate`.
 
-5. **GitOps write** — The Decision Engine opens a PR against the GitOps repo targeting `gitops/apps/{service}/{deployment.yaml}`. The safe demo flow continues after a human merges that PR.
+5. **GitOps write** — The Decision Engine opens a PR against the GitOps repo, updating `gitops/apps/{service}/overlays/{env}/kustomization.yaml` for replica scaling or `gitops/apps/{service}/base/deployment.yaml` for rollout and resource changes. The safe demo flow continues after a human merges that PR.
 
 6. **Cluster sync** — Argo CD detects the merged commit and applies the change to the cluster. The cluster never changes outside of Git.
 
@@ -124,7 +124,7 @@ Alertmanager / CloudWatch
 | Event | Emitted by | Triggers |
 |---|---|---|
 | `SignalBundled` | Signal Collector | Decision Engine (single-agent path) |
-| `AutoRemediationPipelineTriggered` | Signal Collector | Step Functions (multi-agent path) |
+| `SentinelPipelineTriggered` | Signal Collector | Step Functions (multi-agent path) |
 | `ActionDispatched` | GitHub Actions merge workflow | Outcome Validator |
 | `OutcomeValidated` | Outcome Validator | — (terminal success) |
 | `OutcomeFailed` | Outcome Validator | — (auto-revert initiated) |
@@ -162,7 +162,7 @@ Use [docs/demo-alert.json](docs/demo-alert.json) with `make demo-alert` for the 
 | Kubernetes | EKS 1.34 |
 | Observability | Prometheus + Grafana (Helm) |
 | Policy | OPA / Gatekeeper (Helm) |
-| Infrastructure | Terraform (18 custom modules) |
+| Infrastructure | Terraform (20 custom modules) |
 | Webhook auth | HMAC-SHA256 (API Gateway) |
 
 ---
@@ -178,8 +178,8 @@ This is a portfolio project. Here's an honest account of what's built:
 - Outcome validation with automatic revert PR
 - DynamoDB deduplication and audit logging
 - HMAC webhook validation
-- 33 unit tests across all 7 functions
-- 18 Terraform modules provisioning the full stack
+- 123 unit tests across all 7 functions
+- 20 Terraform modules provisioning the full stack
 
 **Intentional scope decisions**
 - The `enable_multi_agent = false` default skips confidence scoring — suitable for demos, not production
@@ -330,7 +330,7 @@ make demo-alert \
 │   ├── main.tf                 # Root module
 │   ├── variables.tf
 │   ├── outputs.tf
-│   └── modules/                # 18 custom Terraform modules
+│   └── modules/                # 20 custom Terraform modules
 ├── Makefile                    # install / test / lint / tf-* targets
 └── docs/                       # Architecture diagrams, runbooks
 ```
