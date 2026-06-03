@@ -1,4 +1,4 @@
-# GitOps Sentinel — Architecture Diagrams
+# GitOps Auto-Remediation — Architecture Diagrams
 
 ## 1. End-to-End Signal Flow
 
@@ -11,7 +11,7 @@ sequenceDiagram
     participant S3  as S3 (bundles)
     participant EB  as EventBridge
     participant DE  as Decision Engine
-    participant SF  as Step Functions<br/>(Sentinel Pipeline)
+    participant SF  as Step Functions<br/>(Auto-Remediation Pipeline)
     participant GH  as GitHub
     participant CD  as Argo CD
     participant OV  as Outcome Validator
@@ -22,7 +22,7 @@ sequenceDiagram
     SC->>DDB: Conditional PutItem (dedup check)
     DDB-->>SC: OK / ConditionalCheckFailed
     SC->>S3: PutObject (signal bundle JSON)
-    SC->>EB: PutEvents → SignalBundled or SentinelPipelineTriggered
+    SC->>EB: PutEvents → SignalBundled or AutoRemediationPipelineTriggered
 
     alt Single-agent path (enable_multi_agent=false)
         EB->>DE: Invoke Decision Engine
@@ -35,19 +35,19 @@ sequenceDiagram
         SF->>SF: ClassifierAgent → RootCauseAgent → ActionPlannerAgent → ConfidenceScorer
         SF->>SF: RouteByConfidence
         alt confidence ≥ 80 and risk = low
-            SF->>GH: Auto-merge PR
+            SF->>DE: Open fast-track PR
         else confidence 40-79
-            SF->>GH: Open PR for review
+            SF->>DE: Open PR for review
         else confidence < 40
             SF->>SF: EscalateToHuman (page on-call)
         end
-        SF->>AUD: PutItem (stage=action_dispatched)
     end
 
     GH->>CD: Webhook (push event)
     CD->>CD: Sync cluster
 
     Note over OV: ~5 min later
+    GH->>EB: PutEvents → ActionDispatched (on merge to main)
     EB->>OV: Invoke Outcome Validator
     OV->>OV: Query Prometheus
     alt error_rate < 20%
@@ -65,12 +65,12 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    A[SignalBundled / SentinelPipelineTriggered] --> B[ClassifierAgent\nSeverity · BlastRadius · Priority]
+    A[SignalBundled / AutoRemediationPipelineTriggered] --> B[ClassifierAgent\nSeverity · BlastRadius · Priority]
     B --> C[RootCauseAgent\nRoot Cause · Contributing Factors\nDiagnosis Confidence 0-100]
     C --> D[ActionPlannerAgent\nProposed Action from allowed-actions.yaml\nAlternatives · Rationale]
     D --> E[ConfidenceScorer\nPure deterministic — no LLM\nBase = diagnosis_confidence\nPenalties: severity · blast_radius · action_type]
     E --> F{RouteByConfidence}
-    F -->|confidence ≥ 80\nrisk = low| G[Auto-Apply\nAuto-merge PR]
+    F -->|confidence ≥ 80\nrisk = low| G[Fast-Track PR\nOpened by Decision Engine]
     F -->|confidence 40-79| H[Open PR\nEngineer reviews]
     F -->|confidence < 40| I[Escalate\nPage on-call\nNo cluster change]
 
@@ -85,7 +85,7 @@ flowchart TD
 
 ```mermaid
 sequenceDiagram
-    participant DE  as Decision Engine / Action Planner
+    participant DE  as Decision Engine
     participant OV  as Outcome Validator
     participant AUD as DynamoDB Audit Log<br/>(90-day TTL)
 
@@ -102,13 +102,13 @@ sequenceDiagram
 ```mermaid
 graph LR
     SC[Signal Collector] -->|SignalBundled| EB[(EventBridge\ncustom bus)]
-    SC -->|SentinelPipelineTriggered| EB
-    DE[Decision Engine] -->|ActionDispatched| EB
+    SC -->|AutoRemediationPipelineTriggered| EB
+    GH[GitHub Actions\nnotify-action-dispatched] -->|ActionDispatched| EB
     OV[Outcome Validator] -->|OutcomeValidated| EB
     OV -->|OutcomeFailed| EB
 
     EB -->|SignalBundled| DE
-    EB -->|SentinelPipelineTriggered| SF[Step Functions]
+    EB -->|AutoRemediationPipelineTriggered| SF[Step Functions]
     EB -->|ActionDispatched| OV
 
     EB --> DLQ[(SQS DLQ\n14-day retention)]

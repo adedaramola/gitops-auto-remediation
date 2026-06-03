@@ -1,4 +1,4 @@
-# Cost Estimate — GitOps Sentinel
+# Cost Estimate — GitOps Auto-Remediation
 
 > Costs vary by region, cluster size, and usage. This is a rough guide for a non-production deployment.
 

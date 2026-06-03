@@ -1,4 +1,4 @@
-# GitOps Sentinel — Lambda Functions
+# GitOps Auto-Remediation — Lambda Functions
 
 ## signal_collector
 - Receives Alertmanager webhook payload (via API Gateway)
@@ -6,7 +6,7 @@
 - Deduplicates signals via DynamoDB conditional write (30-min TTL window)
 - Enriches with Prometheus snapshot queries and Kubernetes events (optional, read-only)
 - Writes signal bundle to S3
-- Emits `SignalBundled` or `SentinelPipelineTriggered` to EventBridge
+- Emits `SignalBundled` or `AutoRemediationPipelineTriggered` to EventBridge
 
 ## decision_engine
 - Triggered by `SignalBundled` (single-agent path)
@@ -17,7 +17,7 @@
 - Writes `action_dispatched` record to DynamoDB Audit Log
 
 ## outcome_validator
-- Triggered by `ActionDispatched`
+- Triggered by `ActionDispatched` after a remediation PR is merged to `main` and the GitHub Actions workflow emits the event back to EventBridge
 - Checks recovery via PromQL (error rate < 20% threshold)
 - Emits `OutcomeValidated` or `OutcomeFailed`
 - Opens revert PR automatically on failure
@@ -50,6 +50,6 @@
 ## Running tests
 ```bash
 cd lambdas
-pytest tests/ -v
+python -m pytest tests/ -v
 ```
-All 33 tests pass with no real AWS credentials required (full stub isolation).
+Run the current Lambda test suite locally with no real AWS credentials required.

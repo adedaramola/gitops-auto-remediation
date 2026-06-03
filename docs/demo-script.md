@@ -1,4 +1,4 @@
-# GitOps Sentinel — Demo Script
+# GitOps Auto-Remediation — Demo Script
 
 ## Goal
 Show one believable MVP path end to end: the system reasons about an incident, scores its confidence, opens a GitOps change, and validates the outcome **without** giving any agent direct cluster write access.
@@ -6,12 +6,13 @@ Show one believable MVP path end to end: the system reasons about an incident, s
 Recommended incident for the demo:
 - `HighHTTP5xxErrorRate`
 - Service: `demo-service`
-- Mode: `enable_multi_agent = true`
-- Expected artifact trail: S3 bundle -> Step Functions execution -> GitHub PR -> Argo CD sync -> Outcome Validator result
+- Mode: `enable_multi_agent = false` for the safest repeatable demo
+- Expected artifact trail: S3 bundle -> GitHub PR -> Argo CD sync -> Outcome Validator result
+- Optional advanced path: switch `enable_multi_agent = true` only after `make demo-preflight` confirms model access, then show the Step Functions execution as part of the same story
 
 Recommended trigger options:
 - `make demo-alert WEBHOOK_URL="<webhook_url>" WEBHOOK_SECRET="<secret>"`
-- `curl` directly with [docs/demo-alert.json](/Users/adedaramola/IT-Practice/AI-Projects/portfolio/gitops-sentinel/docs/demo-alert.json)
+- `curl` directly with [docs/demo-alert.json](demo-alert.json)
 
 ## 5-minute narrative
 
@@ -19,11 +20,11 @@ Recommended trigger options:
 2. **Show webhook endpoint** — `webhook_url` from Terraform output, point to API Gateway
 3. **Trigger a simulated alert** — POST to the webhook (or fire a real Alertmanager alert)
 4. **Show Signal Collector output** — open the S3 signal bundle JSON, highlight enriched context (Prometheus metrics, k8s events)
-5. **Show Sentinel Pipeline execution** — Step Functions console, each agent state, confidence score output from Confidence Scorer
-6. **Show RouteByConfidence decision** — highlight which path was taken (auto_apply / open_pr / escalate) and why
-7. **Show GitHub PR** — created by Decision Engine or Action Planner, point to `allowed-actions.yaml` constraints and the exact file changed in GitOps
-8. **Merge PR → Argo CD syncs** — show Argo CD UI reconciling the cluster
-9. **Show Outcome Validator** — Prometheus health check result, `OutcomeValidated` event, DynamoDB Audit Log entry
+5. **Show GitHub PR** — created by the Decision Engine, point to `allowed-actions.yaml` constraints and the exact file changed in GitOps
+6. **Merge PR → Argo CD syncs** — show Argo CD UI reconciling the cluster
+7. **Show GitHub Actions handoff** — mention that merge to `main` emits `ActionDispatched` back to EventBridge
+8. **Show Outcome Validator** — Prometheus health check result, `OutcomeValidated` or `OutcomeFailed`, DynamoDB Audit Log entry
+9. **Optional multi-agent view** — if `enable_multi_agent = true` passed preflight, show the Step Functions execution and the RouteByConfidence decision
 
 ## Copy-paste trigger
 

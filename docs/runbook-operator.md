@@ -1,4 +1,4 @@
-# GitOps Sentinel — Operator Runbook
+# GitOps Auto-Remediation — Operator Runbook
 
 ## Deploy
 ```bash
@@ -12,13 +12,12 @@ Record outputs:
 - `signals_table_name` — DynamoDB dedup table
 
 ## Configure Argo CD Applications
-Update `repoURL` in:
-- `gitops/argocd/application-staging.yaml`
-- `gitops/argocd/application-prod.yaml`
+Set `bootstrap_argocd_applications = true` in `terraform/terraform.tfvars`. Terraform bootstraps `demo-staging`, `demo-prod`, and `platform-policies` for the normal demo path, so no manual `kubectl apply` is required.
+
+Verify the apps are healthy before the demo:
 
 ```bash
-kubectl apply -n argocd -f gitops/argocd/application-staging.yaml
-kubectl apply -n argocd -f gitops/argocd/application-prod.yaml
+make demo-preflight
 ```
 
 ## Configure Alertmanager webhook
@@ -29,9 +28,9 @@ See `docs/alertmanager-webhook.md` and set:
 1. Trigger a test alert (or lower thresholds temporarily)
 2. Confirm:
    - Signal Collector writes `s3://<bucket>/incidents/inc-*.json`
-   - Decision Engine (or Sentinel Pipeline) opens a GitHub PR
+   - Decision Engine (or the multi-agent pipeline when enabled) opens a GitHub PR
    - CI passes on the PR
-   - Merge PR → Argo CD syncs cluster
+   - Merge PR → GitHub Actions emits `ActionDispatched` → Argo CD syncs cluster
    - Outcome Validator queries Prometheus and emits `OutcomeValidated`
    - DynamoDB Audit Log has entries for `action_dispatched` and `outcome_validated`
 

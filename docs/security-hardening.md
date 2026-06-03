@@ -1,4 +1,4 @@
-# GitOps Sentinel — Security Hardening
+# GitOps Auto-Remediation — Security Hardening
 
 Recommended hardening steps before running in production.
 

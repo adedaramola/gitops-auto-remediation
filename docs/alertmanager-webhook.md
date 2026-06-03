@@ -19,7 +19,7 @@ The webhook sends JSON to the Signal Collector Lambda. It deduplicates, enriches
 
 ## MVP demo trigger
 
-If you want to demo the system without waiting for a real Alertmanager event, use the sample payload in [docs/demo-alert.json](/Users/adedaramola/IT-Practice/AI-Projects/portfolio/gitops-sentinel/docs/demo-alert.json):
+If you want to demo the system without waiting for a real Alertmanager event, use the sample payload in [docs/demo-alert.json](demo-alert.json):
 
 ```bash
 make demo-alert \

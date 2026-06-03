@@ -1,11 +1,11 @@
-# GitOps Sentinel — Confidence-Gated Autonomous Remediation
+# GitOps Auto-Remediation — Confidence-Gated Autonomous Remediation
 
 An AWS-native platform that turns production alerts into **confidence-scored remediation decisions**, enforces guardrails with **CI + Gatekeeper**, and verifies recovery with **PromQL** — optionally opening an **auto-revert PR** on failure.
 
 > **Key principle:** No agent ever writes directly to the cluster. All changes flow through GitOps pull requests.
 
 ## Architecture
-![Architecture Diagram](../GitOps_Sentinel_Architecture.png)
+![Architecture Diagram](../GitOps_Auto_Remediation_Architecture.png)
 
 **Core components**
 - EKS + Argo CD (GitOps reconciliation)
@@ -20,7 +20,7 @@ An AWS-native platform that turns production alerts into **confidence-scored rem
 ## End-to-end flow
 1. Alert fires → `POST /webhook`
 2. Signal Collector deduplicates, enriches, writes S3 bundle → emits `SignalBundled`
-3. Decision Engine (or Sentinel Pipeline) reads bundle + allowed-actions → opens PR
+3. Decision Engine (or Auto-Remediation Pipeline) reads bundle + allowed-actions → opens PR
 4. Merge PR → Argo CD applies change
 5. GitHub Actions emits `ActionDispatched`
 6. Outcome Validator checks recovery → `OutcomeValidated` / `OutcomeFailed` (+ optional auto-revert PR)

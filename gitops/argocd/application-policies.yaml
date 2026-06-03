@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/adedaramola/gitops-sentinel.git
+    repoURL: https://github.com/adedaramola/gitops-auto-remediation.git
     targetRevision: main
     path: gitops/policies
   destination:

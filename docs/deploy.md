@@ -1,4 +1,4 @@
-# Deploying GitOps Sentinel
+# Deploying GitOps Auto-Remediation
 
 ## Prerequisites
 - Terraform >= 1.6
@@ -12,15 +12,17 @@
    ```hcl
    github_owner            = "your-org"
    github_repo             = "your-gitops-repo"
+   gitops_repo_revision    = "main"
    github_token_secret_arn = "arn:aws:secretsmanager:..."
-   enable_multi_agent      = true
+   bootstrap_argocd_applications = true
+   enable_multi_agent      = false
    model_provider          = "bedrock"
    bedrock_model_id        = "anthropic.claude-3-haiku-20240307-v1:0"
    enable_private_prometheus_endpoint = true
    enable_k8s_readonly_enrichment = true
    ```
 
-   This is the recommended MVP demo profile. It gives you the full confidence-gated pipeline plus Prometheus-backed outcome validation.
+   This is the safest repeatable MVP demo profile. Switch `enable_multi_agent` to `true` only after the model-access preflight passes.
 
 2. Deploy infrastructure:
    ```bash
@@ -29,20 +31,17 @@
    terraform apply -var-file=terraform.tfvars
    ```
 
-3. Install Argo CD Applications — update `repoURL` in:
-   - `gitops/argocd/application-staging.yaml`
-   - `gitops/argocd/application-prod.yaml`
-
-   Then apply:
-   ```bash
-   kubectl apply -n argocd -f gitops/argocd/application-staging.yaml
-   kubectl apply -n argocd -f gitops/argocd/application-prod.yaml
-   ```
+3. Terraform bootstraps the Argo CD Applications for `demo-staging`, `demo-prod`, and `platform-policies` when `bootstrap_argocd_applications = true`. No manual `kubectl apply` is required for the normal demo path.
 
 4. Configure Alertmanager webhook using the `webhook_url` Terraform output.
    See `docs/alertmanager-webhook.md`.
 
-5. Trigger an alert and verify:
+5. Run the demo preflight:
+   ```bash
+   make demo-preflight
+   ```
+
+6. Trigger an alert and verify:
    - S3 signal bundle is created under `incidents/`
    - Step Functions execution is created
    - GitHub PR is opened by the Decision Engine or Action Planner

@@ -1,12 +1,12 @@
-# GitOps Sentinel — Junior Developer Implementation Guide
+# GitOps Auto-Remediation — Junior Developer Implementation Guide
 
-This guide walks you through deploying GitOps Sentinel from scratch. Follow every step in order. Each section explains **what** you are doing and **why**, so you understand the system as you build it.
+This guide walks you through deploying GitOps Auto-Remediation from scratch. Follow every step in order. Each section explains **what** you are doing and **why**, so you understand the system as you build it.
 
 ---
 
-## What Is GitOps Sentinel?
+## What Is GitOps Auto-Remediation?
 
-GitOps Sentinel is a self-healing infrastructure platform. When a production alert fires (e.g. high error rate), the system:
+GitOps Auto-Remediation is a self-healing infrastructure platform. When a production alert fires (e.g. high error rate), the system:
 
 1. Receives the alert via webhook
 2. Analyses it using an AI agent (AWS Bedrock)
@@ -86,24 +86,13 @@ Your AWS user/role must be able to create:
 ```bash
 # Fork the repo on GitHub first (click Fork at the top right of the repo page)
 # Then clone YOUR fork (replace YOUR_USERNAME):
-git clone https://github.com/YOUR_USERNAME/gitops-sentinel.git
-cd gitops-sentinel
+git clone https://github.com/YOUR_USERNAME/gitops-auto-remediation.git
+cd gitops-auto-remediation
 ```
 
 > **Why fork?** The Decision Engine Lambda will open pull requests against your GitHub repo. It needs to be YOUR repo so it has permission to write to it.
 
-Update the Argo CD app manifests with your repo URL:
-
-```bash
-# Replace YOUR_USERNAME in both files:
-sed -i '' 's|adedaramola/gitops-sentinel|YOUR_USERNAME/gitops-sentinel|g' \
-  gitops/argocd/application-staging.yaml \
-  gitops/argocd/application-prod.yaml
-
-git add gitops/argocd/
-git commit -m "configure repo url for argocd"
-git push origin main
-```
+If you plan to use Terraform Argo bootstrap, set your repo values in `terraform/terraform.tfvars` instead of editing Argo manifests by hand. The local manifests under `gitops/argocd/` remain useful as references and fallbacks.
 
 ---
 
@@ -146,7 +135,7 @@ cd lambdas
 pytest tests/ -v
 ```
 
-You should see **103 passed**. If any tests fail, stop here and fix them before continuing.
+You should see the full Lambda test suite pass. If any tests fail, stop here and fix them before continuing.
 
 ```bash
 cd ..  # back to repo root
@@ -160,7 +149,7 @@ The Decision Engine Lambda needs to open pull requests on your behalf.
 
 1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)**
 2. Click **Generate new token (classic)**
-3. Give it a name: `gitops-sentinel-decision-engine`
+3. Give it a name: `gitops-auto-remediation-decision-engine`
 4. Set expiration: 90 days (or no expiration for a long-running demo)
 5. Select scopes: ✅ **repo** (this includes contents:write and pull_requests:write)
 6. Click **Generate token**
@@ -174,15 +163,15 @@ Store the PAT in AWS Secrets Manager so the Lambda can retrieve it securely:
 
 ```bash
 aws secretsmanager create-secret \
-  --name "gitops-sentinel/github-token" \
-  --description "GitHub PAT for GitOps Sentinel PR creation" \
+  --name "gitops-auto-remediation/github-token" \
+  --description "GitHub PAT for GitOps Auto-Remediation PR creation" \
   --secret-string '{"token":"YOUR_PAT_HERE"}' \
   --region us-east-1
 ```
 
 Note the `ARN` in the output — you will need it in the next step. It looks like:
 ```
-arn:aws:secretsmanager:us-east-1:123456789012:secret:gitops-sentinel/github-token-xxxxxx
+arn:aws:secretsmanager:us-east-1:123456789012:secret:gitops-auto-remediation/github-token-xxxxxx
 ```
 
 ---
@@ -201,19 +190,19 @@ Edit `terraform/terraform.tfvars` and fill in your values:
 # ─── Required ─────────────────────────────────────────────────────────────────
 
 aws_region   = "us-east-1"
-project_name = "gitops-sentinel"
-cluster_name = "gitops-sentinel-cluster"
+project_name = "gitops-auto-remediation"
+cluster_name = "gitops-auto-remediation-cluster"
 
 # GitHub — use YOUR username and repo name
 github_owner = "YOUR_GITHUB_USERNAME"
-github_repo  = "gitops-sentinel"
+github_repo  = "gitops-auto-remediation"
 
 # ARN from Step 5 above
-github_token_secret_arn = "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:gitops-sentinel/github-token-xxxxxx"
+github_token_secret_arn = "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:gitops-auto-remediation/github-token-xxxxxx"
 
 # ─── Model provider ───────────────────────────────────────────────────────────
 
-model_provider = "bedrock"   # uses AWS Bedrock (Claude Haiku) — no extra setup needed
+model_provider = "bedrock"
 
 # ─── Networking ───────────────────────────────────────────────────────────────
 
@@ -237,28 +226,18 @@ webhook_secret = "PASTE_OUTPUT_OF_OPENSSL_COMMAND_HERE"
 
 # ─── Multi-agent pipeline ─────────────────────────────────────────────────────
 
-enable_multi_agent = true
+enable_multi_agent = false
 ```
 
 > **Important:** `terraform.tfvars` is in `.gitignore` — it will never be committed. Never put real secrets in files that get committed to Git.
 
+> **Safest demo default:** start with `enable_multi_agent = false`. Switch it to `true` only after `make demo-preflight` confirms model access in your AWS account.
+
 ---
 
-## Step 7 — Install Lambda Dependencies Into Terraform Modules
+## Step 7 — Lambda Packaging
 
-The Terraform Lambda modules package the Python source code into zip files. Before deploying, you need to install the pip dependencies into each module's `src/` directory:
-
-```bash
-BASE="terraform/modules"
-
-for mod in lambda_signal_collector lambda_decision_engine lambda_outcome_validator; do
-  pip install requests PyYAML --quiet --target "$BASE/$mod/src/"
-done
-
-echo "Dependencies installed"
-```
-
-> **Why is this needed?** AWS Lambda does not have `requests` or `PyYAML` pre-installed. The dependencies must be bundled inside the zip file that gets uploaded to Lambda.
+No manual dependency copy step is required now. Terraform packages each Lambda directly from `lambdas/<function>/` during apply using the shared packaging flow in `terraform/modules/lambda_package/` and `terraform/scripts/build_lambda.sh`.
 
 ---
 
@@ -295,13 +274,13 @@ When it finishes you will see outputs like:
 
 ```
 cluster_endpoint        = "https://XXXX.gr7.us-east-1.eks.amazonaws.com"
-cluster_name            = "gitops-sentinel-cluster"
-decision_engine_lambda  = "gitops-sentinel-decision-engine"
-event_bus_name          = "gitops-sentinel-bus"
-outcome_validator_lambda = "gitops-sentinel-outcome-validator"
-signal_collector_lambda = "gitops-sentinel-signal-collector"
-signals_bucket_name     = "gitops-sentinel-incidents-xxxxxxxx"
-signals_table_name      = "gitops-sentinel-incidents"
+cluster_name            = "gitops-auto-remediation-cluster"
+decision_engine_lambda  = "gitops-auto-remediation-decision-engine"
+event_bus_name          = "gitops-auto-remediation-bus"
+outcome_validator_lambda = "gitops-auto-remediation-outcome-validator"
+signal_collector_lambda = "gitops-auto-remediation-signal-collector"
+signals_bucket_name     = "gitops-auto-remediation-incidents-xxxxxxxx"
+signals_table_name      = "gitops-auto-remediation-incidents"
 webhook_url             = "https://XXXXXXXXXX.execute-api.us-east-1.amazonaws.com/webhook"
 ```
 
@@ -318,7 +297,7 @@ cd ..  # back to repo root
 After Terraform finishes, configure kubectl to talk to your new EKS cluster:
 
 ```bash
-aws eks update-kubeconfig --name gitops-sentinel-cluster --region us-east-1
+aws eks update-kubeconfig --name gitops-auto-remediation-cluster --region us-east-1
 ```
 
 Verify both nodes are Ready:
@@ -364,36 +343,26 @@ argocd login localhost:8080 --username admin --password YOUR_PASSWORD --insecure
 ### Register Your GitHub Repository
 
 ```bash
-argocd repo add https://github.com/YOUR_USERNAME/gitops-sentinel.git --insecure
+argocd repo add https://github.com/YOUR_USERNAME/gitops-auto-remediation.git --insecure
 ```
 
 > **Note:** If your repo is private, add credentials:
 > ```bash
-> argocd repo add https://github.com/YOUR_USERNAME/gitops-sentinel.git \
+> argocd repo add https://github.com/YOUR_USERNAME/gitops-auto-remediation.git \
 >   --username YOUR_USERNAME \
 >   --password YOUR_CLASSIC_PAT \
 >   --insecure
 > ```
 
-### Create the demo Namespace
-
-```bash
-kubectl create namespace demo
-```
-
 ### Apply the Argo CD Applications
 
 ```bash
-# Sync the ConstraintTemplate first (Gatekeeper CRD must exist before the Constraint)
-argocd app sync demo-staging \
-  --resource templates.gatekeeper.sh:ConstraintTemplate:k8sdeploymentbounds
-
-# Full sync of both apps
-argocd app sync demo-staging
-argocd app sync demo-prod
+make demo-preflight
 ```
 
-Check both apps are Synced and Healthy:
+That verifies the Terraform-bootstrapped Argo CD apps are synced and that `demo-service` is healthy in `demo-staging`.
+
+Check both apps are Synced and Healthy manually if you want:
 
 ```bash
 kubectl get applications -n argocd
@@ -409,7 +378,7 @@ demo-staging   Synced        Healthy
 Check the demo pods are running:
 
 ```bash
-kubectl get pods -n demo
+kubectl get pods -n demo-staging
 ```
 
 Expected (2 running pods):
@@ -434,7 +403,7 @@ The `notify-action-dispatched` GitHub Actions workflow needs to know your EventB
 | `AWS_ACCESS_KEY_ID` | Your AWS access key |
 | `AWS_SECRET_ACCESS_KEY` | Your AWS secret key |
 | `AWS_REGION` | `us-east-1` |
-| `AWS_EVENT_BUS_NAME` | `gitops-sentinel-bus` (from Terraform output) |
+| `AWS_EVENT_BUS_NAME` | `gitops-auto-remediation-bus` (from Terraform output) |
 
 ---
 
@@ -455,7 +424,7 @@ PAYLOAD='{
       "alertname": "HighErrorRate",
       "severity": "critical",
       "service": "demo-service",
-      "namespace": "demo",
+      "namespace": "demo-staging",
       "env": "staging"
     },
     "annotations": {
@@ -499,21 +468,21 @@ curl -s -X POST "$WEBHOOK_URL" \
 
 ### 1. Check the Signal Collector Lambda logs
 ```bash
-aws logs tail /aws/lambda/gitops-sentinel-signal-collector \
+aws logs tail /aws/lambda/gitops-auto-remediation-signal-collector \
   --since 5m --format short
 ```
 Look for a JSON log line with `"event": "signal_bundled"`.
 
 ### 2. Check the Decision Engine Lambda logs
 ```bash
-aws logs tail /aws/lambda/gitops-sentinel-decision-engine \
+aws logs tail /aws/lambda/gitops-auto-remediation-decision-engine \
   --since 5m --format short
 ```
 Look for `"event": "pr_opened"` or `"event": "pr_already_exists"`.
 
 ### 3. Check for the GitHub PR
 ```bash
-gh pr list --repo YOUR_USERNAME/gitops-sentinel --state open
+gh pr list --repo YOUR_USERNAME/gitops-auto-remediation --state open
 ```
 
 You should see a PR like:
@@ -524,16 +493,16 @@ You should see a PR like:
 ### 4. Review and merge the PR
 ```bash
 # View the diff
-gh pr diff 1 --repo YOUR_USERNAME/gitops-sentinel
+gh pr diff 1 --repo YOUR_USERNAME/gitops-auto-remediation
 
 # Merge it
-gh pr merge 1 --repo YOUR_USERNAME/gitops-sentinel --squash
+gh pr merge 1 --repo YOUR_USERNAME/gitops-auto-remediation --squash
 ```
 
 ### 5. Watch Argo CD apply the change
 ```bash
 # Wait ~15 seconds after merging, then:
-kubectl get deployment demo-service -n demo -o jsonpath='{.spec.replicas}'
+kubectl get deployment demo-service -n demo-staging -o jsonpath='{.spec.replicas}'
 ```
 
 The replica count should have changed (e.g. 2 → 3).
@@ -541,14 +510,14 @@ The replica count should have changed (e.g. 2 → 3).
 ### 6. Check the Outcome Validator Lambda logs
 After the GitHub Actions workflow runs (it fires `ActionDispatched` to EventBridge on merge):
 ```bash
-aws logs tail /aws/lambda/gitops-sentinel-outcome-validator \
+aws logs tail /aws/lambda/gitops-auto-remediation-outcome-validator \
   --since 10m --format short
 ```
 
 ### 7. Check the DynamoDB Audit Log
 ```bash
 aws dynamodb scan \
-  --table-name gitops-sentinel-decision-audit \
+  --table-name gitops-auto-remediation-decision-audit \
   --query "Items[*].[incident_id.S, stage.S, action.S]" \
   --output table
 ```
@@ -561,12 +530,12 @@ aws dynamodb scan \
 |---|---|---|
 | `No module named 'requests'` in Lambda logs | pip deps not bundled in zip | Re-run Step 7, then re-upload with `aws lambda update-function-code` |
 | `GitHub API error 403` in Decision Engine logs | PAT doesn't have `repo` scope | Create a new classic PAT with full `repo` scope, update Secrets Manager |
-| `GitHub API error 403` after updating PAT | Lambda has cached the old token (5-min TTL) | Force a cold start by updating any env var on the Lambda: `aws lambda update-function-configuration --function-name gitops-sentinel-decision-engine --environment "$(aws lambda get-function-configuration --function-name gitops-sentinel-decision-engine --query 'Environment' --output json \| python3 -c "import json,sys,time; e=json.load(sys.stdin); e['Variables']['CACHE_BUST']=str(time.time()); print(json.dumps(e))")"` then fire a new alert |
-| Terraform shows `0 changes` after adding deps to `src/` | Terraform's `archive_file` data source doesn't always detect directory changes | Re-upload the Lambda manually: `cd terraform/modules/lambda_signal_collector/src && zip -r /tmp/lambda.zip . && aws lambda update-function-code --function-name gitops-sentinel-signal-collector --zip-file fileb:///tmp/lambda.zip` — repeat for `decision_engine` and `outcome_validator` |
+| `GitHub API error 403` after updating PAT | Lambda has cached the old token (5-min TTL) | Force a cold start by updating any env var on the Lambda: `aws lambda update-function-configuration --function-name gitops-auto-remediation-decision-engine --environment "$(aws lambda get-function-configuration --function-name gitops-auto-remediation-decision-engine --query 'Environment' --output json \| python3 -c "import json,sys,time; e=json.load(sys.stdin); e['Variables']['CACHE_BUST']=str(time.time()); print(json.dumps(e))")"` then fire a new alert |
+| Terraform shows `0 changes` after adding deps to `src/` | Terraform's `archive_file` data source doesn't always detect directory changes | Re-upload the Lambda manually: `cd terraform/modules/lambda_signal_collector/src && zip -r /tmp/lambda.zip . && aws lambda update-function-code --function-name gitops-auto-remediation-signal-collector --zip-file fileb:///tmp/lambda.zip` — repeat for `decision_engine` and `outcome_validator` |
 | Argo CD app shows `ComparisonError: allowed-actions.yaml missing Resource metadata` | `allowed-actions.yaml` is a policy config file, not a Kubernetes manifest — it must not be listed as a kustomize resource | Check `gitops/policies/kustomization.yaml` — the `resources:` list should only contain `gatekeeper/constrainttemplate-deployment-bounds.yaml` and `gatekeeper/constraint-deployment-bounds.yaml`. Remove any reference to `allowed-actions.yaml` |
 | Argo CD app shows `ComparisonError` (other kustomize errors) | kustomize build fails | Run `kustomize build gitops/clusters/staging` locally to see the full error |
 | `K8sDeploymentBounds CRD not installed` on Argo CD sync | ConstraintTemplate not applied first | Run `argocd app sync demo-staging --resource templates.gatekeeper.sh:ConstraintTemplate:k8sdeploymentbounds` then full sync |
-| Webhook returns `Internal Server Error` | Lambda import error | Check Lambda logs: `aws logs tail /aws/lambda/gitops-sentinel-signal-collector --since 5m` |
+| Webhook returns `Internal Server Error` | Lambda import error | Check Lambda logs: `aws logs tail /aws/lambda/gitops-auto-remediation-signal-collector --since 5m` |
 | Signal Collector returns 401 | Wrong `X-Webhook-Secret` header value | Check `webhook_secret` in `terraform.tfvars` matches the header you're sending |
 | DynamoDB dedup suppressing alerts | Same alert fired within 30-min TTL window | Change `startsAt` timestamp in the test payload to get a new `incident_id` |
 | Step Functions pipeline stuck | Agent Lambda timeout or Bedrock throttling | Check X-Ray traces in AWS Console → X-Ray → Traces |
@@ -589,10 +558,10 @@ This takes 10–15 minutes. Verify in the AWS Console that:
 - The S3 bucket is gone (you may need to empty it first if it has objects)
 - The Lambda functions are gone
 
-> **Note:** The Secrets Manager secret (`gitops-sentinel/github-token`) is NOT managed by Terraform — delete it manually:
+> **Note:** The Secrets Manager secret (`gitops-auto-remediation/github-token`) is NOT managed by Terraform — delete it manually:
 > ```bash
 > aws secretsmanager delete-secret \
->   --secret-id "gitops-sentinel/github-token" \
+>   --secret-id "gitops-auto-remediation/github-token" \
 >   --force-delete-without-recovery
 > ```
 
@@ -604,7 +573,7 @@ Once you have the basic loop working:
 
 1. **Connect real Prometheus** — set `prometheus_query_url` in `terraform.tfvars` to your Prometheus endpoint. The Signal Collector will enrich alerts with real error rate metrics, and the Outcome Validator will check actual recovery.
 
-2. **Try the multi-agent pipeline** — the Step Functions pipeline (Classifier → Root Cause → Action Planner → Confidence Scorer) runs when `enable_multi_agent = true` and the confidence score routes to `auto_apply` (≥80) or `escalate` (<40).
+2. **Try the multi-agent pipeline** — the Step Functions pipeline (Classifier → Root Cause → Action Planner → Confidence Scorer) runs when `enable_multi_agent = true`. Enable it only after `make demo-preflight` confirms working model access.
 
 3. **Add Slack notifications** — set `slack_webhook_url` in `terraform.tfvars` to get notified when the Outcome Validator runs.
 

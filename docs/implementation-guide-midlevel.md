@@ -1,4 +1,4 @@
-# GitOps Sentinel — Mid-Level Developer Implementation Guide
+# GitOps Auto-Remediation — Mid-Level Developer Implementation Guide
 
 This guide assumes you are comfortable with AWS, Kubernetes, Python, and Terraform. Steps are concise — the focus is on architecture decisions, customisation points, and production considerations rather than hand-holding through CLI basics.
 
@@ -23,7 +23,7 @@ Signal Collector Lambda
     ├── S3 PUT  →  incidents/<incident_id>.json
     └── EventBridge PUT
             ├── SignalBundled         →  Decision Engine Lambda (single-agent path)
-            └── SentinelPipelineTriggered  →  Step Functions (multi-agent path)
+            └── AutoRemediationPipelineTriggered  →  Step Functions (multi-agent path)
 
 Decision Engine Lambda (single-agent)
     ├── Reads signal bundle from S3
@@ -33,13 +33,13 @@ Decision Engine Lambda (single-agent)
     ├── Opens GitHub PR with patch
     └── Writes action_dispatched record to DynamoDB Audit Log
 
-Step Functions — Sentinel Pipeline (multi-agent)
+Step Functions — Auto-Remediation Pipeline (multi-agent)
     ├── ClassifierAgent   →  severity, blast radius, key signals
     ├── RootCauseAgent    →  LLM root cause + confidence score (0–100)
     ├── ActionPlanner     →  proposed action + alternatives
     ├── ConfidenceScorer  →  deterministic scoring + penalty model
     └── RouteByConfidence
-            ├── ≥80 + low risk  →  auto_apply  (merge PR automatically)
+            ├── ≥80 + low risk  →  auto_apply  (opens the fast-track PR path)
             ├── 40–79           →  open_pr     (human review)
             └── <40             →  escalate    (PagerDuty / Slack)
 
@@ -79,7 +79,7 @@ Outcome Validator Lambda
 │   ├── action_planner/app.py        # Step Functions: action proposal
 │   ├── confidence_scorer/app.py     # Step Functions: deterministic scoring
 │   ├── requirements.txt
-│   └── tests/                       # 103 unit tests, full stub isolation
+│   └── tests/                       # Lambda unit tests with stub isolation
 │
 ├── terraform/
 │   ├── main.tf                      # Root module — wires everything together
@@ -146,15 +146,9 @@ Outcome Validator Lambda
 
 ### 1. Fork the repo
 
-Fork `adedaramola/gitops-sentinel` to your GitHub account. The Decision Engine writes PRs to this repo — it must be yours.
+Fork `adedaramola/gitops-auto-remediation` to your GitHub account. The Decision Engine writes PRs to this repo — it must be yours.
 
-Update Argo CD app manifests:
-```bash
-sed -i '' 's|adedaramola/gitops-sentinel|YOUR_USERNAME/gitops-sentinel|g' \
-  gitops/argocd/application-staging.yaml \
-  gitops/argocd/application-prod.yaml
-git add gitops/argocd/ && git commit -m "configure argocd repo url" && git push
-```
+For the normal demo path, prefer Terraform Argo bootstrap over manual manifest edits. Set `github_owner`, `github_repo`, and `bootstrap_argocd_applications = true` in `terraform/terraform.tfvars`.
 
 ### 2. Create GitHub PAT
 
@@ -162,24 +156,16 @@ Classic PAT with `repo` scope. Store in Secrets Manager:
 
 ```bash
 aws secretsmanager create-secret \
-  --name "gitops-sentinel/github-token" \
+  --name "gitops-auto-remediation/github-token" \
   --secret-string '{"token":"ghp_YOUR_TOKEN"}' \
   --region us-east-1
 ```
 
 Note the returned ARN.
 
-### 3. Bundle Lambda dependencies
+### 3. Lambda packaging
 
-Terraform archives each Lambda's `src/` directory as-is. Dependencies must be co-located:
-
-```bash
-for mod in lambda_signal_collector lambda_decision_engine lambda_outcome_validator; do
-  pip install requests PyYAML --quiet --target "terraform/modules/$mod/src/"
-done
-```
-
-> **Production note:** Replace this with a proper build pipeline — a `null_resource` with `local-exec` in each Terraform module, or a Lambda Layer for shared deps. The manual install approach works for development but is fragile in CI.
+No manual bundling step is required now. Terraform packages directly from `lambdas/<function>/` using the shared packaging flow in `terraform/modules/lambda_package/` and `terraform/scripts/build_lambda.sh`.
 
 ### 4. Create `terraform/terraform.tfvars`
 
@@ -191,17 +177,19 @@ Minimum required values:
 
 ```hcl
 aws_region              = "us-east-1"
-project_name            = "gitops-sentinel"
-cluster_name            = "gitops-sentinel-cluster"
+project_name            = "gitops-auto-remediation"
+cluster_name            = "gitops-auto-remediation-cluster"
 github_owner            = "YOUR_USERNAME"
-github_repo             = "gitops-sentinel"
-github_token_secret_arn = "arn:aws:secretsmanager:us-east-1:ACCOUNT:secret:gitops-sentinel/github-token-xxxxxx"
+github_repo             = "gitops-auto-remediation"
+github_token_secret_arn = "arn:aws:secretsmanager:us-east-1:ACCOUNT:secret:gitops-auto-remediation/github-token-xxxxxx"
 model_provider          = "bedrock"
 vpc_cidr                = "10.20.0.0/16"
 az_count                = 2
 webhook_secret          = "$(openssl rand -hex 32)"  # replace with actual value
-enable_multi_agent      = true
+enable_multi_agent      = false
 ```
+
+Use `enable_multi_agent = false` for the safest repeatable demo. Switch it to `true` only after `make demo-preflight` confirms model access.
 
 ### 5. Deploy
 
@@ -216,7 +204,7 @@ EKS provisioning takes ~10 minutes. On completion you'll have the `webhook_url` 
 **Known issue:** Helm installs (Argo CD, Gatekeeper, observability) may fail on the first apply because the Kubernetes API is not yet reachable when Terraform's Helm provider initialises. Fix:
 
 ```bash
-aws eks update-kubeconfig --name gitops-sentinel-cluster --region us-east-1
+aws eks update-kubeconfig --name gitops-auto-remediation-cluster --region us-east-1
 terraform apply -auto-approve   # second run succeeds
 ```
 
@@ -232,17 +220,10 @@ kubectl port-forward svc/argo-cd-argocd-server -n argocd 8080:443 &
 argocd login localhost:8080 --username admin --password <PASSWORD> --insecure
 
 # Register repo (public repo — no credentials needed)
-argocd repo add https://github.com/YOUR_USERNAME/gitops-sentinel.git --insecure
+argocd repo add https://github.com/YOUR_USERNAME/gitops-auto-remediation.git --insecure
 
-# Create namespace and apply apps
-kubectl create namespace demo
-
-# Apply ConstraintTemplate before Constraint (Gatekeeper CRD ordering)
-argocd app sync demo-staging \
-  --resource templates.gatekeeper.sh:ConstraintTemplate:k8sdeploymentbounds
-
-argocd app sync demo-staging
-argocd app sync demo-prod
+# Verify the Terraform-bootstrapped apps and demo workload
+make demo-preflight
 ```
 
 ### 7. GitHub Actions secrets
@@ -254,7 +235,7 @@ In your repo → Settings → Secrets → Actions, add:
 | `AWS_ACCESS_KEY_ID` | Your AWS key |
 | `AWS_SECRET_ACCESS_KEY` | Your AWS secret |
 | `AWS_REGION` | `us-east-1` |
-| `AWS_EVENT_BUS_NAME` | `gitops-sentinel-bus` |
+| `AWS_EVENT_BUS_NAME` | `gitops-auto-remediation-bus` |
 
 ---
 
@@ -274,7 +255,7 @@ curl -s -X POST "$WEBHOOK_URL" \
     "alerts":[{
       "status":"firing",
       "labels":{"alertname":"HighErrorRate","severity":"critical",
-                "service":"demo-service","namespace":"demo","env":"staging"},
+                "service":"demo-service","namespace":"demo-staging","env":"staging"},
       "annotations":{"summary":"High error rate on demo-service"},
       "startsAt":"2026-01-01T00:00:00Z","endsAt":"0001-01-01T00:00:00Z",
       "generatorURL":"http://prometheus:9090/graph"
@@ -294,23 +275,23 @@ curl -s -X POST "$WEBHOOK_URL" \
 
 ```bash
 # Signal Collector
-aws logs tail /aws/lambda/gitops-sentinel-signal-collector --since 5m --format short
+aws logs tail /aws/lambda/gitops-auto-remediation-signal-collector --since 5m --format short
 
 # Decision Engine
-aws logs tail /aws/lambda/gitops-sentinel-decision-engine --since 5m --format short
+aws logs tail /aws/lambda/gitops-auto-remediation-decision-engine --since 5m --format short
 
 # PRs opened
-gh pr list --repo YOUR_USERNAME/gitops-sentinel --state open
+gh pr list --repo YOUR_USERNAME/gitops-auto-remediation --state open
 
 # After merging PR — replica count
-kubectl get deployment demo-service -n demo -o jsonpath='{.spec.replicas}'
+kubectl get deployment demo-service -n demo-staging -o jsonpath='{.spec.replicas}'
 
 # Outcome Validator
-aws logs tail /aws/lambda/gitops-sentinel-outcome-validator --since 10m --format short
+aws logs tail /aws/lambda/gitops-auto-remediation-outcome-validator --since 10m --format short
 
 # DynamoDB Audit Log
 aws dynamodb scan \
-  --table-name gitops-sentinel-decision-audit \
+  --table-name gitops-auto-remediation-decision-audit \
   --query "Items[*].[incident_id.S, stage.S, action.S]" \
   --output table
 ```
@@ -392,7 +373,7 @@ Routes:
   final_score < 40                   →  escalate
 ```
 
-To test `auto_apply` routing, set a high `diagnosis_confidence` in a mock Step Functions execution or trigger with a low-severity alert.
+For the live MVP demo, keep `enable_multi_agent = false` unless `make demo-preflight` confirms your chosen model provider is accessible.
 
 ---
 
@@ -426,13 +407,13 @@ The `notify-action-dispatched.yaml` workflow bridges GitHub (where the PR merge 
 ## Observability
 
 - **CloudWatch Logs** — all Lambda functions emit structured JSON with a standardized schema. Always-present fields: `timestamp` (ISO-8601 UTC), `level`, `component`, `msg`, `request_id`, `trace_id`. Caller-supplied fields: `incident_id`, `service`, `env`, `alertname`, `execution_arn`. Example: `{"timestamp":"2026-05-27T14:03:11.482Z","level":"INFO","component":"signal_collector","msg":"incident_received","request_id":"abc-123","trace_id":"Root=1-...","incident_id":"inc-..."}`
-- **Step Functions execution logs** — ALL-level execution events (state transitions, input/output) written to `/aws/vendedlogs/states/gitops-sentinel-multi-agent-pipeline` with 30-day retention
-- **API Gateway access logs** — structured JSON per request (method, route, status, integration latency, error) in `/aws/apigateway/gitops-sentinel-webhook`
+- **Step Functions execution logs** — ALL-level execution events (state transitions, input/output) written to `/aws/vendedlogs/states/gitops-auto-remediation-multi-agent-pipeline` with 30-day retention
+- **API Gateway access logs** — structured JSON per request (method, route, status, integration latency, error) in `/aws/apigateway/gitops-auto-remediation-webhook`
 - **EKS control-plane logs** — api, audit, authenticator, controllerManager, scheduler all enabled with 180-day retention (security tier)
 - **Pod logs** — `aws-for-fluent-bit` DaemonSet ships stdout/stderr from all namespaces to `/aws/eks/<cluster>/pod-logs`; pods annotated with `gitops.sentinel/incident-id` so logs are joinable on `incident_id`
 - **X-Ray tracing** — enabled on all Lambda functions; trace the full execution path in the AWS Console
-- **DynamoDB Audit Log** — `gitops-sentinel-decision-audit` table; every decision stored with 90-day TTL
-- **EventBridge DLQ** — failed EventBridge deliveries land in an SQS dead letter queue (`gitops-sentinel-eventbridge-dlq`) with 14-day retention
+- **DynamoDB Audit Log** — `gitops-auto-remediation-decision-audit` table; every decision stored with 90-day TTL
+- **EventBridge DLQ** — failed EventBridge deliveries land in an SQS dead letter queue (`gitops-auto-remediation-eventbridge-dlq`) with 14-day retention
 - **Alerting** — CloudWatch metric filters on `webhook_auth_failed`, `dedup_write_failed`, `audit_write_failed`, `auto_revert_failed`, Lambda ERROR count, and EventBridge DLQ depth; wire `var.alarm_actions` to an SNS topic to receive pages
 - **Grafana** — pipeline-health dashboard (incidents, dedup, PRs, outcomes, confidence routing, Lambda errors, SFN failures, DLQ depth) auto-provisioned via ConfigMap; CloudWatch datasource with IRSA for cross-pillar pivot
 
@@ -448,8 +429,8 @@ The `notify-action-dispatched.yaml` workflow bridges GitHub (where the PR merge 
 | Gatekeeper ConstraintTemplate must be synced before Constraint | Manual step required on fresh Argo CD setup | Add Argo CD sync waves via `argocd.argoproj.io/sync-wave` annotations |
 | No Alertmanager integration test | You have to fire test alerts manually | Add a `make test-alert` Makefile target or a test receiver in Alertmanager config |
 | GitHub PAT is a long-lived credential | Security risk | Migrate to GitHub App installation token flow (token cache already implemented in Decision Engine) |
-| Lambda token cache (5-min TTL) not invalidated when Secrets Manager is updated | After rotating a PAT, the Lambda serves stale credentials for up to 5 minutes | Force a cold start immediately by updating any env var: `aws lambda update-function-configuration --function-name gitops-sentinel-decision-engine --environment "$(aws lambda get-function-configuration --function-name gitops-sentinel-decision-engine --query 'Environment' --output json \| python3 -c "import json,sys,time; e=json.load(sys.stdin); e['Variables']['CACHE_BUST']=str(time.time()); print(json.dumps(e))")"` |
-| Terraform `archive_file` data source does not reliably detect changes to `src/` directory contents | `terraform apply` reports `0 changes` after adding pip deps — Lambda runs stale code | Re-upload manually: `cd terraform/modules/lambda_{name}/src && zip -r /tmp/fn.zip . && aws lambda update-function-code --function-name gitops-sentinel-{name} --zip-file fileb:///tmp/fn.zip`. Long-term fix: use `null_resource` with `local-exec` and a `triggers` hash of the src directory |
+| Lambda token cache (5-min TTL) not invalidated when Secrets Manager is updated | After rotating a PAT, the Lambda serves stale credentials for up to 5 minutes | Force a cold start immediately by updating any env var: `aws lambda update-function-configuration --function-name gitops-auto-remediation-decision-engine --environment "$(aws lambda get-function-configuration --function-name gitops-auto-remediation-decision-engine --query 'Environment' --output json \| python3 -c "import json,sys,time; e=json.load(sys.stdin); e['Variables']['CACHE_BUST']=str(time.time()); print(json.dumps(e))")"` |
+| Terraform `archive_file` data source does not reliably detect changes to `src/` directory contents | `terraform apply` reports `0 changes` after adding pip deps — Lambda runs stale code | Re-upload manually: `cd terraform/modules/lambda_{name}/src && zip -r /tmp/fn.zip . && aws lambda update-function-code --function-name gitops-auto-remediation-{name} --zip-file fileb:///tmp/fn.zip`. Long-term fix: use `null_resource` with `local-exec` and a `triggers` hash of the src directory |
 | `allowed-actions.yaml` must not be listed in `gitops/policies/kustomization.yaml` as a resource | It is a Lambda config file, not a Kubernetes manifest — kustomize will reject it with `missing Resource metadata` | Only Gatekeeper manifests belong in that kustomization's `resources:` list. `allowed-actions.yaml` is fetched directly from GitHub by the Decision Engine at runtime via the GitHub Contents API |
 
 ---
@@ -461,7 +442,7 @@ cd terraform && terraform destroy -auto-approve
 
 # Secrets Manager is not managed by Terraform — delete manually
 aws secretsmanager delete-secret \
-  --secret-id "gitops-sentinel/github-token" \
+  --secret-id "gitops-auto-remediation/github-token" \
   --force-delete-without-recovery
 ```
 
@@ -470,6 +451,6 @@ If `terraform destroy` fails on the EKS node group (common when Kubernetes resou
 ```bash
 argocd app delete demo-staging --cascade
 argocd app delete demo-prod --cascade
-kubectl delete namespace demo
+kubectl delete namespace demo-staging
 terraform destroy -auto-approve
 ```

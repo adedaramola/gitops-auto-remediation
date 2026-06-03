@@ -1,4 +1,4 @@
-# GitOps Sentinel
+# GitOps Auto-Remediation
 
 > Autonomous Kubernetes remediation — AI reasons about your incidents, Git owns every change, and humans only get paged when the system isn't sure.
 
@@ -10,13 +10,13 @@ On-call engineers get paged for everything — including incidents the system al
 
 The cost isn't just sleep. It's the cognitive overhead of triaging incidents that are routine, well-understood, and fixable in seconds by anyone who's seen them before.
 
-GitOps Sentinel asks a different question: **what if the system could decide whether a human is actually needed?**
+GitOps Auto-Remediation asks a different question: **what if the system could decide whether a human is actually needed?**
 
 ---
 
 ## What It Does
 
-GitOps Sentinel is a confidence-gated remediation pipeline for Kubernetes. When an alert fires, it doesn't just notify — it reasons, proposes a fix, scores its own confidence, and acts accordingly.
+GitOps Auto-Remediation is a confidence-gated remediation pipeline for Kubernetes. When an alert fires, it doesn't just notify — it reasons, proposes a fix, scores its own confidence, and acts accordingly.
 
 | Confidence | Action |
 |---|---|
@@ -54,7 +54,7 @@ Every remediation is a Git commit. The cluster never changes outside of a pull r
 
 ## Architecture
 
-At its core, GitOps Sentinel is a signal-to-action pipeline with a confidence gate in the middle:
+At its core, GitOps Auto-Remediation is a signal-to-action pipeline with a confidence gate in the middle:
 
 ```
 Alert fires → Signal collected → AI pipeline → Confidence gate → Git commit → Cluster sync → Outcome check
@@ -76,7 +76,7 @@ Alertmanager / CloudWatch
         │
         ├──► Decision Engine Lambda        (single-agent path, feature-flag off)
         │
-        └──► Step Functions: Sentinel Pipeline  (multi-agent path, feature-flag on)
+        └──► Step Functions: Auto-Remediation Pipeline  (multi-agent path, feature-flag on)
                 │
                 ├── Classifier Agent     → severity, blast radius, incident type
                 ├── Root Cause Agent     → root cause, contributing factors, confidence
@@ -109,9 +109,9 @@ Alertmanager / CloudWatch
    - **Single-agent** (`false`, default): Decision Engine reads the bundle, calls the LLM once, opens a GitHub PR. No confidence scoring. Designed for demos and cost-sensitive environments.
    - **Multi-agent** (`true`): Step Functions runs the full pipeline — Classifier → Root Cause → Action Planner → Confidence Scorer → RouteByConfidence.
 
-4. **Confidence routing** — The Confidence Scorer produces a deterministic score (no LLM call, no latency) by starting from the diagnosis confidence and applying penalties for severity, blast radius, and action risk type. The score determines the route: auto-apply, open PR for review, or escalate to on-call.
+4. **Confidence routing** — The Confidence Scorer produces a deterministic score (no LLM call, no latency) by starting from the diagnosis confidence and applying penalties for severity, blast radius, and action risk type. The score determines the route: fast-track PR, open PR for review, or escalate to on-call.
 
-5. **GitOps write** — The Decision Engine opens a PR against the GitOps repo targeting `gitops/apps/{service}/{deployment.yaml}`. High-confidence PRs are auto-merged via the GitHub API.
+5. **GitOps write** — The Decision Engine opens a PR against the GitOps repo targeting `gitops/apps/{service}/{deployment.yaml}`. The safe demo flow continues after a human merges that PR.
 
 6. **Cluster sync** — Argo CD detects the merged commit and applies the change to the cluster. The cluster never changes outside of Git.
 
@@ -124,8 +124,8 @@ Alertmanager / CloudWatch
 | Event | Emitted by | Triggers |
 |---|---|---|
 | `SignalBundled` | Signal Collector | Decision Engine (single-agent path) |
-| `SentinelPipelineTriggered` | Signal Collector | Step Functions (multi-agent path) |
-| `ActionDispatched` | Decision Engine | Outcome Validator |
+| `AutoRemediationPipelineTriggered` | Signal Collector | Step Functions (multi-agent path) |
+| `ActionDispatched` | GitHub Actions merge workflow | Outcome Validator |
 | `OutcomeValidated` | Outcome Validator | — (terminal success) |
 | `OutcomeFailed` | Outcome Validator | — (auto-revert initiated) |
 
@@ -137,16 +137,16 @@ For the MVP demo, focus on one end-to-end story:
 
 1. Trigger a `HighHTTP5xxErrorRate` alert for `demo-service`
 2. Show Signal Collector writing the enriched incident bundle to S3
-3. Show the multi-agent pipeline in Step Functions
-4. Show the confidence-based route decision
-5. Show the GitHub PR against the GitOps repo
-6. Merge the PR and let Argo CD sync it
-7. Show Outcome Validator reporting `OutcomeValidated` or `OutcomeFailed`
+3. Show the GitHub PR against the GitOps repo
+4. Merge the PR and let Argo CD sync it
+5. Show the GitHub Actions handoff that emits `ActionDispatched`
+6. Show Outcome Validator reporting `OutcomeValidated` or `OutcomeFailed`
+7. If preflight confirms model access, optionally show the multi-agent Step Functions execution as an advanced path
 
 This is the clearest path to demonstrate the product's core claim: AI can reason about a Kubernetes incident, write a GitOps change, and validate the result without direct cluster write access.
 
-See [docs/demo-script.md](/Users/adedaramola/IT-Practice/AI-Projects/portfolio/gitops-sentinel/docs/demo-script.md) for the talk track.
-Use [docs/demo-alert.json](/Users/adedaramola/IT-Practice/AI-Projects/portfolio/gitops-sentinel/docs/demo-alert.json) with `make demo-alert` for the fastest live trigger.
+See [docs/demo-script.md](docs/demo-script.md) for the talk track.
+Use [docs/demo-alert.json](docs/demo-alert.json) with `make demo-alert` for the fastest live trigger.
 
 ---
 
@@ -174,7 +174,7 @@ This is a portfolio project. Here's an honest account of what's built:
 **Built and working**
 - All 7 Lambda functions — Signal Collector, Decision Engine, Outcome Validator, Classifier Agent, Root Cause Agent, Action Planner, Confidence Scorer
 - Full Step Functions state machine with retry and fallback logic
-- GitHub PR automation: branch creation, commit, PR open, auto-merge
+- GitHub PR automation: branch creation, commit, PR open, idempotency checks
 - Outcome validation with automatic revert PR
 - DynamoDB deduplication and audit logging
 - HMAC webhook validation
@@ -192,12 +192,12 @@ This is a portfolio project. Here's an honest account of what's built:
 
 ## MVP Scope
 
-For a live demo, treat GitOps Sentinel as an MVP with one primary success path:
+For a live demo, treat GitOps Auto-Remediation as an MVP with one primary success path:
 
 - Incident: `HighHTTP5xxErrorRate`
 - Service: `demo-service`
-- Routing mode: `enable_multi_agent = true`
-- LLM provider: Bedrock by default
+- Routing mode: `enable_multi_agent = true` only after `make demo-preflight` confirms model access; otherwise use `false`
+- LLM provider: whichever passes `make demo-preflight`
 - Outcome: open a GitHub PR, reconcile via Argo CD, then verify with Outcome Validator
 
 What to emphasize in the demo:
@@ -246,11 +246,13 @@ Copy `terraform/terraform.tfvars.example` to `terraform/terraform.tfvars`:
 ```hcl
 github_owner            = "your-org"
 github_repo             = "your-gitops-repo"
+gitops_repo_revision    = "main"
 github_token_secret_arn = "arn:aws:secretsmanager:..."
 
 prometheus_query_url = "https://prom.example.com"
 slack_webhook_url    = "https://hooks.slack.com/..."
 webhook_secret       = ""   # openssl rand -hex 32
+bootstrap_argocd_applications = true
 enable_multi_agent   = true
 model_provider       = "bedrock"  # or "openai"
 bedrock_model_id     = "anthropic.claude-3-haiku-20240307-v1:0"
@@ -260,14 +262,15 @@ openai_secret_arn    = ""   # required only when model_provider = "openai"
 Recommended MVP profile:
 
 ```hcl
-enable_multi_agent             = true
-model_provider                 = "bedrock"
-bedrock_model_id               = "anthropic.claude-3-haiku-20240307-v1:0"
+bootstrap_argocd_applications  = true
 enable_private_prometheus_endpoint = true
 enable_k8s_readonly_enrichment = true
 ```
 
-That profile gives you the best demo story because it exercises the full confidence-gated flow and the post-change validation path.
+Then choose one of these demo modes:
+
+- Safest repeatable demo: `enable_multi_agent = false`
+- Full confidence-gated demo: `enable_multi_agent = true`, but only after `make demo-preflight` confirms your model provider works
 
 ---
 
@@ -280,6 +283,14 @@ terraform apply -var-file=terraform.tfvars
 ```
 
 The `webhook_url` output is the endpoint to configure in Alertmanager's `receivers`.
+
+Before a live demo, run:
+
+```bash
+make demo-preflight
+```
+
+That checks Argo CD application sync, `demo-service` readiness in `demo-staging`, and whether multi-agent mode has working model access.
 
 Fastest MVP trigger after deploy:
 
