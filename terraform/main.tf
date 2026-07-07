@@ -332,6 +332,7 @@ module "iam" {
   event_bus_arn           = module.eventing.event_bus_arn
   incidents_table_arn     = module.signals_table.table_arn
   audit_table_arn         = module.audit_log.table_arn
+  auto_apply_param_arn    = aws_ssm_parameter.auto_apply_enabled.arn
   github_token_secret_arn = var.github_token_secret_arn
   openai_secret_arn       = var.openai_secret_arn
 }
@@ -369,6 +370,9 @@ module "decision_engine_lambda" {
   cluster_name            = var.cluster_name
   prometheus_query_url    = var.prometheus_query_url
   audit_table_name        = module.audit_log.table_name
+
+  auto_apply_enabled_param = aws_ssm_parameter.auto_apply_enabled.name
+  auto_apply_max_per_hour  = var.auto_apply_max_per_hour
 }
 
 module "outcome_validator_lambda" {

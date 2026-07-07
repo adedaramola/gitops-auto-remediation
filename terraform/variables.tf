@@ -43,6 +43,12 @@ variable "alarm_email" {
   description = "Optional email address subscribed to the pipeline alarms SNS topic. Requires confirming the subscription email after apply."
 }
 
+variable "auto_apply_max_per_hour" {
+  type        = number
+  default     = 3
+  description = "Maximum PRs the Decision Engine may auto-merge per hour. Merges beyond this open PRs for human review instead."
+}
+
 variable "project_name" {
   type    = string
   default = "ai-gitops-Self-Healing"

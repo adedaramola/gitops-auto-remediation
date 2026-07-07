@@ -524,5 +524,87 @@ class TestEventEmission(unittest.TestCase):
         mock_emit.assert_called_once()
 
 
+class TestAutoApplyGuardrails(unittest.TestCase):
+    def setUp(self):
+        app._kill_switch_cache.update({"value": None, "expires_at": 0.0})
+
+    def tearDown(self):
+        app.AUTO_APPLY_ENABLED_PARAM = ""
+        app.AUDIT_TABLE_NAME = ""
+        app._kill_switch_cache.update({"value": None, "expires_at": 0.0})
+
+    def test_kill_switch_unset_param_allows(self):
+        app.AUTO_APPLY_ENABLED_PARAM = ""
+        self.assertTrue(app._auto_apply_enabled())
+
+    def test_kill_switch_false_blocks(self):
+        app.AUTO_APPLY_ENABLED_PARAM = "/test/auto-apply-enabled"
+        app.ssm.get_parameter = MagicMock(return_value={"Parameter": {"Value": "false"}})
+        self.assertFalse(app._auto_apply_enabled())
+
+    def test_kill_switch_true_allows_and_caches(self):
+        app.AUTO_APPLY_ENABLED_PARAM = "/test/auto-apply-enabled"
+        app.ssm.get_parameter = MagicMock(return_value={"Parameter": {"Value": "true"}})
+        self.assertTrue(app._auto_apply_enabled())
+        self.assertTrue(app._auto_apply_enabled())
+        app.ssm.get_parameter.assert_called_once()  # second call served from cache
+
+    def test_kill_switch_read_failure_fails_closed(self):
+        app.AUTO_APPLY_ENABLED_PARAM = "/test/auto-apply-enabled"
+        app.ssm.get_parameter = MagicMock(side_effect=Exception("ssm down"))
+        self.assertFalse(app._auto_apply_enabled())
+
+    def test_rate_limit_under_budget_allows(self):
+        app.AUDIT_TABLE_NAME = "audit"
+        app.dynamodb.update_item = MagicMock(
+            return_value={"Attributes": {"applied": {"N": str(app.AUTO_APPLY_MAX_PER_HOUR)}}})
+        self.assertTrue(app._auto_apply_rate_ok())
+
+    def test_rate_limit_over_budget_blocks(self):
+        app.AUDIT_TABLE_NAME = "audit"
+        app.dynamodb.update_item = MagicMock(
+            return_value={"Attributes": {"applied": {"N": str(app.AUTO_APPLY_MAX_PER_HOUR + 1)}}})
+        self.assertFalse(app._auto_apply_rate_ok())
+
+    def test_rate_limit_counter_failure_fails_closed(self):
+        app.AUDIT_TABLE_NAME = "audit"
+        app.dynamodb.update_item = MagicMock(side_effect=Exception("dynamo down"))
+        self.assertFalse(app._auto_apply_rate_ok())
+
+    def test_kill_switch_blocks_merge_leaving_pr_open(self):
+        bundle = {"incident_id": "inc-gated", "service": "demo-service", "env": "staging", "prometheus": {}}
+        plan = {
+            "action": "scale_replicas",
+            "target": {"service": "demo-service", "env": "staging"},
+            "params": {"replicas": 3},
+            "risk": "low",
+            "rationale": "test",
+        }
+        app.s3.get_object.return_value = _make_s3_body(bundle)
+        with (
+            patch.object(app, "_get_github_token", return_value="tok"),
+            patch.object(app, "_fetch_allowed_actions", return_value={}),
+            patch.object(app, "_llm_plan", return_value=plan),
+            patch.object(app, "_find_existing_pr", return_value=None),
+            patch.object(app, "_get_ref_sha", return_value="base-sha"),
+            patch.object(app, "_create_branch", return_value={}),
+            patch.object(app, "_get_file", return_value=_kustomize_file_obj()),
+            patch.object(app, "_put_file", return_value={}),
+            patch.object(app, "_open_pr", return_value={"number": 31, "html_url": "https://github.com/pr/31"}),
+            patch.object(app, "_auto_apply_enabled", return_value=False),
+            patch.object(app, "_merge_pr") as mock_merge,
+            patch.object(app, "_emit") as mock_emit,
+            patch.object(app, "_audit_write") as mock_audit,
+        ):
+            event = {"s3_bucket": "b", "s3_key": "k", "risk": {"recommendation": "auto_apply"}}
+            resp = app.handler(event, MagicMock())
+
+        self.assertEqual(resp["statusCode"], 200)
+        self.assertEqual(json.loads(resp["body"])["message"], "PR opened")
+        mock_merge.assert_not_called()
+        mock_emit.assert_not_called()
+        self.assertEqual(mock_audit.call_args[0][1]["outcome"], "pending")
+
+
 if __name__ == "__main__":
     unittest.main()

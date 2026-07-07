@@ -7,6 +7,7 @@ variable "incident_bucket_arn" { type = string }
 variable "event_bus_arn" { type = string }
 variable "incidents_table_arn" { type = string }
 variable "audit_table_arn" { type = string }
+variable "auto_apply_param_arn" { type = string }
 variable "github_token_secret_arn" { type = string }
 variable "openai_secret_arn" {
   type    = string
@@ -172,7 +173,8 @@ resource "aws_iam_role_policy" "decision_engine_inline" {
       [
         { Effect = "Allow", Action = ["s3:GetObject"], Resource = ["${var.incident_bucket_arn}/*"] },
         { Effect = "Allow", Action = ["events:PutEvents"], Resource = [var.event_bus_arn] },
-        { Effect = "Allow", Action = ["dynamodb:PutItem"], Resource = [var.audit_table_arn] }
+        { Effect = "Allow", Action = ["dynamodb:PutItem", "dynamodb:UpdateItem"], Resource = [var.audit_table_arn] },
+        { Effect = "Allow", Action = ["ssm:GetParameter"], Resource = [var.auto_apply_param_arn] }
       ],
       length(concat(local.github_secret_arns, local.llm_secret_arns)) > 0 ? [
         { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = concat(local.github_secret_arns, local.llm_secret_arns) }

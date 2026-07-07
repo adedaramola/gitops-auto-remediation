@@ -14,6 +14,11 @@ variable "aws_region" { type = string }
 variable "cluster_name" { type = string }
 variable "prometheus_query_url" { type = string }
 variable "audit_table_name" { type = string }
+variable "auto_apply_enabled_param" { type = string }
+variable "auto_apply_max_per_hour" {
+  type    = number
+  default = 3
+}
 
 module "package" {
   source            = "../lambda_package"
@@ -43,6 +48,8 @@ resource "aws_lambda_function" "this" {
       GITHUB_REPO                 = var.github_repo
       GITHUB_APP_TOKEN_SECRET_ARN = var.github_token_secret_arn
       EVENT_BUS_NAME              = var.event_bus_name
+      AUTO_APPLY_ENABLED_PARAM    = var.auto_apply_enabled_param
+      AUTO_APPLY_MAX_PER_HOUR     = tostring(var.auto_apply_max_per_hour)
       MODEL_PROVIDER              = var.model_provider
       BEDROCK_MODEL_ID            = var.bedrock_model_id
       OPENAI_SECRET_ARN           = var.openai_secret_arn

@@ -34,6 +34,22 @@ See `docs/alertmanager-webhook.md` and set:
    - Outcome Validator queries Prometheus and emits `OutcomeValidated` or `OutcomeFailed`
    - DynamoDB Audit Log has entries for `action_dispatched` and `outcome_validated`
 
+## Auto-apply guardrails
+
+The Decision Engine only auto-merges high-confidence PRs when two guardrails pass; otherwise the PR stays open for human review and an `AutoApplyBlocked` metric is emitted.
+
+**Kill switch** — disable all auto-merging immediately (takes effect within ~30s):
+
+```bash
+aws ssm put-parameter --name /gitops-sentinel/auto-apply-enabled --value false --overwrite
+# re-enable
+aws ssm put-parameter --name /gitops-sentinel/auto-apply-enabled --value true --overwrite
+```
+
+Terraform ignores value drift on this parameter, so an operator flip survives `terraform apply`. If the parameter can't be read at all, auto-apply fails closed (disabled).
+
+**Rate limit** — at most `auto_apply_max_per_hour` auto-merges per hour (default 3), tracked by an atomic counter in the audit table (`incident_id = rate#auto_apply`). Merges beyond the budget open PRs for review instead. Raise the limit in tfvars if legitimate remediations are being throttled.
+
 ## Common failure modes
 
 | Symptom | Likely cause | Fix |

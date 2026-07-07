@@ -70,6 +70,7 @@ bedrock = boto3.client("bedrock-runtime", region_name=os.environ.get("AWS_REGION
 dynamodb = boto3.client("dynamodb")
 cw = boto3.client("cloudwatch")
 events = boto3.client("events")
+ssm = boto3.client("ssm")
 
 
 def _put_metric(name: str, value: float = 1.0, unit: str = "Count", **dims):
@@ -98,6 +99,8 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 OPENAI_SECRET_ARN = os.environ.get("OPENAI_SECRET_ARN", "")
 AUDIT_TABLE_NAME = os.environ.get("AUDIT_TABLE_NAME", "")
 EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "")
+AUTO_APPLY_ENABLED_PARAM = os.environ.get("AUTO_APPLY_ENABLED_PARAM", "")
+AUTO_APPLY_MAX_PER_HOUR = int(os.environ.get("AUTO_APPLY_MAX_PER_HOUR", "3"))
 
 # ── GitHub token cache (persists across warm Lambda invocations) ──────────────
 _token_cache: dict = {"value": None, "expires_at": 0.0}
@@ -213,11 +216,77 @@ def _merge_pr(owner, repo, pr_number, token, commit_message=""):
     return _gh("PUT", f"/repos/{owner}/{repo}/pulls/{pr_number}/merge", token, json=payload)
 
 
+# Kill-switch cache: flipping the SSM parameter takes effect within 30s
+# on warm Lambdas without an SSM call per invocation.
+_kill_switch_cache: dict = {"value": None, "expires_at": 0.0}
+
+
+def _auto_apply_enabled() -> bool:
+    """SSM kill switch for the auto-merge path. Fails closed: if the parameter
+    exists but cannot be read, or reads anything other than 'true', auto-apply
+    is disabled and PRs are left open for human review. An unset
+    AUTO_APPLY_ENABLED_PARAM (param not provisioned) leaves the gate open."""
+    if not AUTO_APPLY_ENABLED_PARAM:
+        return True
+    now = time.time()
+    if _kill_switch_cache["value"] is not None and now < _kill_switch_cache["expires_at"]:
+        return _kill_switch_cache["value"]
+    try:
+        resp = ssm.get_parameter(Name=AUTO_APPLY_ENABLED_PARAM)
+        enabled = resp["Parameter"]["Value"].strip().lower() == "true"
+    except Exception as exc:  # noqa: BLE001
+        _log("warning", "kill_switch_read_failed", error=str(exc))
+        enabled = False
+    _kill_switch_cache["value"] = enabled
+    _kill_switch_cache["expires_at"] = now + 30
+    return enabled
+
+
+def _auto_apply_rate_ok() -> bool:
+    """Hourly rate limit via an atomic counter in the audit table
+    (incident_id='rate#auto_apply', event_time=<hour bucket>). Counts merge
+    attempts, so a failed merge still consumes budget — conservative by
+    design. Fails closed if the counter cannot be updated."""
+    if not AUDIT_TABLE_NAME:
+        return True
+    now = int(time.time())
+    try:
+        resp = dynamodb.update_item(
+            TableName=AUDIT_TABLE_NAME,
+            Key={
+                "incident_id": {"S": "rate#auto_apply"},
+                "event_time":  {"N": str(now // 3600)},
+            },
+            UpdateExpression="ADD applied :one SET #t = if_not_exists(#t, :expiry)",
+            ExpressionAttributeNames={"#t": "ttl"},
+            ExpressionAttributeValues={
+                ":one":    {"N": "1"},
+                ":expiry": {"N": str(now + 7 * 86400)},
+            },
+            ReturnValues="UPDATED_NEW",
+        )
+        count = int(resp["Attributes"]["applied"]["N"])
+    except Exception as exc:  # noqa: BLE001
+        _log("warning", "rate_limit_check_failed", error=str(exc))
+        return False
+    return count <= AUTO_APPLY_MAX_PER_HOUR
+
+
 def _auto_apply(pr, incident_id, action, service, env, token) -> bool:
     """High-confidence path: merge the PR and emit ActionDispatched so the
     Outcome Validator is triggered natively via EventBridge. Returns True if
-    merged; on merge failure (branch protection, pending checks) the PR is
-    left open for human review instead."""
+    merged; when a guardrail blocks or the merge fails (branch protection,
+    pending checks) the PR is left open for human review instead."""
+    if not _auto_apply_enabled():
+        _log("warning", "auto_apply_blocked", reason="kill_switch",
+             incident_id=incident_id, pr_number=pr.get("number"))
+        _put_metric("AutoApplyBlocked", Reason="kill_switch")
+        return False
+    if not _auto_apply_rate_ok():
+        _log("warning", "auto_apply_blocked", reason="rate_limited",
+             incident_id=incident_id, pr_number=pr.get("number"))
+        _put_metric("AutoApplyBlocked", Reason="rate_limited")
+        return False
     try:
         # Marker tells the Notify Action Dispatched workflow to skip emission:
         # this path emits ActionDispatched itself, and a second event would
