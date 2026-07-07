@@ -468,6 +468,8 @@ class TestEventEmission(unittest.TestCase):
         body = json.loads(resp["body"])
         self.assertEqual(body["message"], "PR auto-applied")
         mock_merge.assert_called_once()
+        self.assertIn("auto-applied by decision engine",
+                      mock_merge.call_args.kwargs.get("commit_message", ""))
         detail_type, detail = mock_emit.call_args[0]
         self.assertEqual(detail_type, "ActionDispatched")
         self.assertEqual(detail["incident_id"], "inc-auto")

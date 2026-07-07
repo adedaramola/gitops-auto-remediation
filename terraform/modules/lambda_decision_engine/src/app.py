@@ -206,10 +206,11 @@ def _open_pr(owner, repo, title, body, head, base, token):
     })
 
 
-def _merge_pr(owner, repo, pr_number, token):
-    return _gh("PUT", f"/repos/{owner}/{repo}/pulls/{pr_number}/merge", token, json={
-        "merge_method": "squash",
-    })
+def _merge_pr(owner, repo, pr_number, token, commit_message=""):
+    payload = {"merge_method": "squash"}
+    if commit_message:
+        payload["commit_message"] = commit_message
+    return _gh("PUT", f"/repos/{owner}/{repo}/pulls/{pr_number}/merge", token, json=payload)
 
 
 def _auto_apply(pr, incident_id, action, service, env, token) -> bool:
@@ -218,7 +219,11 @@ def _auto_apply(pr, incident_id, action, service, env, token) -> bool:
     merged; on merge failure (branch protection, pending checks) the PR is
     left open for human review instead."""
     try:
-        _merge_pr(GITHUB_OWNER, GITHUB_REPO, pr["number"], token)
+        # Marker tells the Notify Action Dispatched workflow to skip emission:
+        # this path emits ActionDispatched itself, and a second event would
+        # run the Outcome Validator twice.
+        _merge_pr(GITHUB_OWNER, GITHUB_REPO, pr["number"], token,
+                  commit_message=f"{incident_id}: auto-applied by decision engine")
     except RuntimeError as exc:
         _log("warning", "auto_merge_failed", incident_id=incident_id,
              pr_number=pr.get("number"), error=str(exc))

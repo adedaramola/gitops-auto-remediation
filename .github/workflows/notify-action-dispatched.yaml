@@ -17,6 +17,14 @@ jobs:
         run: |
           MSG="$(git log -1 --pretty=%B)"
           echo "Commit message: $MSG"
+          # Auto-applied merges already emitted ActionDispatched from the
+          # Decision Engine; emitting again would run the Outcome Validator twice.
+          if echo "$MSG" | grep -q "auto-applied by decision engine"; then
+            echo "Auto-applied merge detected — skipping duplicate ActionDispatched."
+            echo "incident_id=" >> $GITHUB_OUTPUT
+            echo "service=unknown" >> $GITHUB_OUTPUT
+            exit 0
+          fi
           INC=$(echo "$MSG" | grep -oE "inc-[0-9]+-[a-z0-9]+" | head -n 1 || true)
           SVC=$(echo "$MSG" | grep -oP '(?<=for )\S+(?= \()' | head -n 1 || true)
           echo "incident_id=$INC" >> $GITHUB_OUTPUT
