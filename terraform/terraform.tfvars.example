@@ -59,6 +59,10 @@ enable_k8s_readonly_enrichment = true
 # Slack incoming webhook URL for Verifier status messages (optional)
 slack_webhook_url = ""  # e.g. "https://hooks.slack.com/services/T00/B00/xxxx"
 
+# Email subscribed to the pipeline alarms SNS topic (optional).
+# You must confirm the subscription email AWS sends after apply.
+alarm_email = ""  # e.g. "oncall@example.com"
+
 # ─── Webhook security ─────────────────────────────────────────────────────────
 
 # Shared secret to authenticate Alertmanager webhook calls.

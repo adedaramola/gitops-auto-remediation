@@ -34,7 +34,13 @@ variable "environment" {
 variable "alarm_actions" {
   type        = list(string)
   default     = []
-  description = "SNS topic ARNs to notify when a pipeline alarm fires. Leave empty to create alarms without notification."
+  description = "Extra SNS topic ARNs to notify when a pipeline alarm fires, in addition to the topic this stack creates."
+}
+
+variable "alarm_email" {
+  type        = string
+  default     = ""
+  description = "Optional email address subscribed to the pipeline alarms SNS topic. Requires confirming the subscription email after apply."
 }
 
 variable "project_name" {

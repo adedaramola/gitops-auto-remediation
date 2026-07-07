@@ -98,7 +98,7 @@ module "observability" {
   oidc_provider        = replace(module.eks.cluster_oidc_issuer_url, "https://", "")
   webhook_url          = var.enable_api_gateway ? module.webhook[0].webhook_url : ""
   webhook_secret       = var.webhook_secret
-  alarm_actions        = var.alarm_actions
+  alarm_actions        = local.alarm_action_arns
   prometheus_node_port = local.prometheus_private_node_port
 
   depends_on = [aws_cloudwatch_log_group.lambda_logs, time_sleep.kubernetes_api_ready]
