@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 
 import boto3
@@ -89,7 +90,6 @@ GITHUB_TOKEN_SECRET_ARN = os.environ.get("GITHUB_APP_TOKEN_SECRET_ARN", "")
 ALLOWED_ACTIONS_PATH    = os.environ.get("ALLOWED_ACTIONS_PATH", "gitops/policies/allowed-actions.yaml")
 
 # ── GitHub token cache ────────────────────────────────────────────────────────
-import time
 _token_cache: dict = {"value": None, "expires_at": 0.0}
 
 
