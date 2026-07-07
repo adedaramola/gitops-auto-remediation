@@ -1,5 +1,6 @@
 variable "project_name" { type = string }
 variable "role_arn" { type = string }
+variable "event_bus_name" { type = string }
 variable "github_owner" { type = string }
 variable "github_repo" { type = string }
 variable "github_token_secret_arn" { type = string }
@@ -41,6 +42,7 @@ resource "aws_lambda_function" "this" {
       GITHUB_OWNER                = var.github_owner
       GITHUB_REPO                 = var.github_repo
       GITHUB_APP_TOKEN_SECRET_ARN = var.github_token_secret_arn
+      EVENT_BUS_NAME              = var.event_bus_name
       MODEL_PROVIDER              = var.model_provider
       BEDROCK_MODEL_ID            = var.bedrock_model_id
       OPENAI_SECRET_ARN           = var.openai_secret_arn

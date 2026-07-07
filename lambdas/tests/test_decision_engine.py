@@ -301,6 +301,7 @@ class TestHandlerScaleReplicas(unittest.TestCase):
             patch.object(app, "_get_file", return_value=_kustomize_file_obj()),
             patch.object(app, "_put_file", return_value={}),
             patch.object(app, "_open_pr", return_value={"number": 7, "html_url": "https://github.com/pr/7"}),
+            patch.object(app, "_emit"),
             patch.object(app, "_audit_write"),
         ):
             event = {"detail": {"s3_bucket": "test-bucket", "s3_key": "incidents/inc-1234-abcd.json"}}
@@ -373,6 +374,7 @@ class TestHandlerRollbackImage(unittest.TestCase):
             patch.object(app, "_get_file", return_value=_deployment_file_obj()),
             patch.object(app, "_put_file", return_value={}),
             patch.object(app, "_open_pr", return_value={"number": 9, "html_url": "https://github.com/pr/9"}),
+            patch.object(app, "_emit"),
             patch.object(app, "_audit_write"),
         ):
             event = {"detail": {"s3_bucket": "b", "s3_key": "k"}}
@@ -398,6 +400,126 @@ class TestAuditWrite(unittest.TestCase):
         call_kwargs = app.dynamodb.put_item.call_args[1]
         self.assertEqual(call_kwargs["TableName"], "test-audit-table")
         app.AUDIT_TABLE_NAME = ""
+
+
+class TestEventEmission(unittest.TestCase):
+    def test_handler_accepts_raw_step_functions_state_without_emitting_action_dispatched(self):
+        bundle = {"incident_id": "inc-stepfn", "service": "demo-service", "env": "staging", "prometheus": {}}
+        plan = {
+            "action": "scale_replicas",
+            "target": {"service": "demo-service", "env": "staging"},
+            "params": {"replicas": 3},
+            "risk": "low",
+            "rationale": "test",
+        }
+        app.s3.get_object.return_value = _make_s3_body(bundle)
+        with (
+            patch.object(app, "_get_github_token", return_value="tok"),
+            patch.object(app, "_fetch_allowed_actions", return_value={}),
+            patch.object(app, "_llm_plan", return_value=plan),
+            patch.object(app, "_find_existing_pr", return_value=None),
+            patch.object(app, "_get_ref_sha", return_value="base-sha"),
+            patch.object(app, "_create_branch", return_value={}),
+            patch.object(app, "_get_file", return_value=_kustomize_file_obj()),
+            patch.object(app, "_put_file", return_value={}),
+            patch.object(app, "_open_pr", return_value={"number": 11, "html_url": "https://github.com/pr/11"}),
+            patch.object(app, "_emit") as mock_emit,
+            patch.object(app, "_audit_write"),
+        ):
+            resp = app.handler({"s3_bucket": "b", "s3_key": "k"}, MagicMock())
+
+        self.assertEqual(resp["statusCode"], 200)
+        mock_emit.assert_not_called()
+
+    def _auto_apply_event(self):
+        return {"s3_bucket": "b", "s3_key": "k", "risk": {"recommendation": "auto_apply"}}
+
+    def _plan(self):
+        return {
+            "action": "scale_replicas",
+            "target": {"service": "demo-service", "env": "staging"},
+            "params": {"replicas": 3},
+            "risk": "low",
+            "rationale": "test",
+        }
+
+    def _bundle(self):
+        return {"incident_id": "inc-auto", "service": "demo-service", "env": "staging", "prometheus": {}}
+
+    def test_auto_apply_route_merges_pr_and_emits_action_dispatched(self):
+        app.s3.get_object.return_value = _make_s3_body(self._bundle())
+        with (
+            patch.object(app, "_get_github_token", return_value="tok"),
+            patch.object(app, "_fetch_allowed_actions", return_value={}),
+            patch.object(app, "_llm_plan", return_value=self._plan()),
+            patch.object(app, "_find_existing_pr", return_value=None),
+            patch.object(app, "_get_ref_sha", return_value="base-sha"),
+            patch.object(app, "_create_branch", return_value={}),
+            patch.object(app, "_get_file", return_value=_kustomize_file_obj()),
+            patch.object(app, "_put_file", return_value={}),
+            patch.object(app, "_open_pr", return_value={"number": 21, "html_url": "https://github.com/pr/21"}),
+            patch.object(app, "_merge_pr", return_value={"merged": True}) as mock_merge,
+            patch.object(app, "_emit") as mock_emit,
+            patch.object(app, "_audit_write") as mock_audit,
+        ):
+            resp = app.handler(self._auto_apply_event(), MagicMock())
+
+        self.assertEqual(resp["statusCode"], 200)
+        body = json.loads(resp["body"])
+        self.assertEqual(body["message"], "PR auto-applied")
+        mock_merge.assert_called_once()
+        detail_type, detail = mock_emit.call_args[0]
+        self.assertEqual(detail_type, "ActionDispatched")
+        self.assertEqual(detail["incident_id"], "inc-auto")
+        self.assertEqual(detail["pr_number"], 21)
+        self.assertEqual(detail["route"], "auto_apply")
+        audit_record = mock_audit.call_args[0][1]
+        self.assertEqual(audit_record["outcome"], "auto_applied")
+
+    def test_auto_apply_merge_failure_leaves_pr_open_without_emitting(self):
+        app.s3.get_object.return_value = _make_s3_body(self._bundle())
+        with (
+            patch.object(app, "_get_github_token", return_value="tok"),
+            patch.object(app, "_fetch_allowed_actions", return_value={}),
+            patch.object(app, "_llm_plan", return_value=self._plan()),
+            patch.object(app, "_find_existing_pr", return_value=None),
+            patch.object(app, "_get_ref_sha", return_value="base-sha"),
+            patch.object(app, "_create_branch", return_value={}),
+            patch.object(app, "_get_file", return_value=_kustomize_file_obj()),
+            patch.object(app, "_put_file", return_value={}),
+            patch.object(app, "_open_pr", return_value={"number": 22, "html_url": "https://github.com/pr/22"}),
+            patch.object(app, "_merge_pr", side_effect=RuntimeError("GitHub API error 405: checks pending")),
+            patch.object(app, "_emit") as mock_emit,
+            patch.object(app, "_audit_write") as mock_audit,
+        ):
+            resp = app.handler(self._auto_apply_event(), MagicMock())
+
+        self.assertEqual(resp["statusCode"], 200)
+        body = json.loads(resp["body"])
+        self.assertEqual(body["message"], "PR opened")
+        mock_emit.assert_not_called()
+        audit_record = mock_audit.call_args[0][1]
+        self.assertEqual(audit_record["outcome"], "pending")
+
+    def test_auto_apply_retry_merges_existing_pr(self):
+        app.s3.get_object.return_value = _make_s3_body(self._bundle())
+        with (
+            patch.object(app, "_get_github_token", return_value="tok"),
+            patch.object(app, "_fetch_allowed_actions", return_value={}),
+            patch.object(app, "_llm_plan", return_value=self._plan()),
+            patch.object(app, "_find_existing_pr",
+                         return_value={"number": 23, "html_url": "https://github.com/pr/23"}),
+            patch.object(app, "_merge_pr", return_value={"merged": True}) as mock_merge,
+            patch.object(app, "_emit") as mock_emit,
+            patch.object(app, "_audit_write"),
+        ):
+            resp = app.handler(self._auto_apply_event(), MagicMock())
+
+        self.assertEqual(resp["statusCode"], 200)
+        body = json.loads(resp["body"])
+        self.assertEqual(body["message"], "PR auto-applied")
+        mock_merge.assert_called_once()
+        mock_emit.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -125,7 +125,7 @@ Alertmanager / CloudWatch
 |---|---|---|
 | `SignalBundled` | Signal Collector | Decision Engine (single-agent path) |
 | `SentinelPipelineTriggered` | Signal Collector | Step Functions (multi-agent path) |
-| `ActionDispatched` | GitHub Actions merge workflow | Outcome Validator |
+| `ActionDispatched` | GitHub Actions merge workflow · Decision Engine (auto-apply merge) | Outcome Validator |
 | `OutcomeValidated` | Outcome Validator | — (terminal success) |
 | `OutcomeFailed` | Outcome Validator | — (auto-revert initiated) |
 

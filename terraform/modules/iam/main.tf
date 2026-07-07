@@ -171,6 +171,7 @@ resource "aws_iam_role_policy" "decision_engine_inline" {
     Statement = concat(
       [
         { Effect = "Allow", Action = ["s3:GetObject"], Resource = ["${var.incident_bucket_arn}/*"] },
+        { Effect = "Allow", Action = ["events:PutEvents"], Resource = [var.event_bus_arn] },
         { Effect = "Allow", Action = ["dynamodb:PutItem"], Resource = [var.audit_table_arn] }
       ],
       length(concat(local.github_secret_arns, local.llm_secret_arns)) > 0 ? [

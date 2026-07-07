@@ -169,17 +169,23 @@ resource "aws_sfn_state_machine" "multi_agent" {
 
       # auto_apply: high-confidence path — opens and immediately merges the PR
       QueueForAutoApply = {
-        Type       = "Task"
-        Resource   = var.agent_lambda_arn
-        Comment    = "High-confidence path: opens PR and merges without human review."
+        Type     = "Task"
+        Resource = var.agent_lambda_arn
+        Comment  = "High-confidence path: opens PR and merges without human review."
+        Parameters = {
+          "detail.$" = "$"
+        }
         ResultPath = "$.pr_result"
         Next       = "PipelineComplete"
       }
 
       OpenRemediationPR = {
-        Type       = "Task"
-        Resource   = var.agent_lambda_arn
-        Comment    = "Opens a GitHub PR for human review. Used for medium-confidence remediations."
+        Type     = "Task"
+        Resource = var.agent_lambda_arn
+        Comment  = "Opens a GitHub PR for human review. Used for medium-confidence remediations."
+        Parameters = {
+          "detail.$" = "$"
+        }
         ResultPath = "$.pr_result"
         Next       = "PipelineComplete"
       }

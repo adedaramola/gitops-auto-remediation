@@ -69,6 +69,7 @@ secrets = boto3.client("secretsmanager")
 bedrock = boto3.client("bedrock-runtime", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 dynamodb = boto3.client("dynamodb")
 cw = boto3.client("cloudwatch")
+events = boto3.client("events")
 
 
 def _put_metric(name: str, value: float = 1.0, unit: str = "Count", **dims):
@@ -96,6 +97,7 @@ ALLOWED_ACTIONS_PATH = os.environ.get("ALLOWED_ACTIONS_PATH", "gitops/policies/a
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 OPENAI_SECRET_ARN = os.environ.get("OPENAI_SECRET_ARN", "")
 AUDIT_TABLE_NAME = os.environ.get("AUDIT_TABLE_NAME", "")
+EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "")
 
 # ── GitHub token cache (persists across warm Lambda invocations) ──────────────
 _token_cache: dict = {"value": None, "expires_at": 0.0}
@@ -123,6 +125,17 @@ def _get_secret_json(arn: str) -> dict:
     sec = secrets.get_secret_value(SecretId=arn)
     payload = sec.get("SecretString") or "{}"
     return json.loads(payload)
+
+
+def _emit(detail_type: str, detail: dict) -> None:
+    if not EVENT_BUS_NAME:
+        return
+    events.put_events(Entries=[{
+        "EventBusName": EVENT_BUS_NAME,
+        "Source": "gitops.sentinel",
+        "DetailType": detail_type,
+        "Detail": json.dumps(detail),
+    }])
 
 
 def _get_github_token() -> str:
@@ -191,6 +204,39 @@ def _open_pr(owner, repo, title, body, head, base, token):
         "head": head,
         "base": base,
     })
+
+
+def _merge_pr(owner, repo, pr_number, token):
+    return _gh("PUT", f"/repos/{owner}/{repo}/pulls/{pr_number}/merge", token, json={
+        "merge_method": "squash",
+    })
+
+
+def _auto_apply(pr, incident_id, action, service, env, token) -> bool:
+    """High-confidence path: merge the PR and emit ActionDispatched so the
+    Outcome Validator is triggered natively via EventBridge. Returns True if
+    merged; on merge failure (branch protection, pending checks) the PR is
+    left open for human review instead."""
+    try:
+        _merge_pr(GITHUB_OWNER, GITHUB_REPO, pr["number"], token)
+    except RuntimeError as exc:
+        _log("warning", "auto_merge_failed", incident_id=incident_id,
+             pr_number=pr.get("number"), error=str(exc))
+        _put_metric("AutoMergeFailures", Action=action)
+        return False
+    _log("info", "pr_auto_merged", incident_id=incident_id,
+         pr_number=pr.get("number"), pr_url=pr.get("html_url"))
+    _put_metric("PRsAutoApplied", Action=action)
+    _emit("ActionDispatched", {
+        "incident_id": incident_id,
+        "service": service,
+        "env": env,
+        "action": action,
+        "pr_number": pr.get("number"),
+        "pr_url": pr.get("html_url"),
+        "route": "auto_apply",
+    })
+    return True
 
 
 def _fetch_allowed_actions(token, ref="main") -> dict:
@@ -343,9 +389,12 @@ def handler(event, context):
     """Triggered by EventBridge on SignalBundled. Reads incident bundle
     from S3, proposes remediation via LLM, and opens a PR."""
     _init_log_context(context)
-    detail = event.get("detail", {})
+    detail = event.get("detail") or event
     bucket = detail["s3_bucket"]
     key = detail["s3_key"]
+    # Step Functions passes the full pipeline state as detail; the confidence
+    # scorer's recommendation selects the auto_apply route.
+    route = (detail.get("risk") or {}).get("recommendation", "")
 
     bundle = json.loads(s3.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8"))
     incident_id = bundle["incident_id"]
@@ -390,8 +439,11 @@ Revert this PR.
     if existing_pr:
         _log("info", "pr_already_exists", incident_id=incident_id,
              pr_number=existing_pr.get("number"), pr_url=existing_pr.get("html_url"))
+        auto_applied = False
+        if route == "auto_apply":  # retry after a partial run: finish the merge
+            auto_applied = _auto_apply(existing_pr, incident_id, action, service, env, token)
         return {"statusCode": 200, "body": json.dumps({
-            "message": "PR already exists",
+            "message": "PR auto-applied" if auto_applied else "PR already exists",
             "incident_id": incident_id,
             "action": action,
             "pr_number": existing_pr.get("number"),
@@ -466,6 +518,10 @@ Revert this PR.
          pr_number=pr.get("number"), pr_url=pr.get("html_url"))
     _put_metric("PRsOpened", Action=action)
 
+    auto_applied = False
+    if route == "auto_apply":
+        auto_applied = _auto_apply(pr, incident_id, action, service, env, token)
+
     _audit_write(incident_id, {
         "stage":       "action_dispatched",
         "action":      action,
@@ -474,11 +530,11 @@ Revert this PR.
         "confidence":  str(plan.get("risk", "unknown")),
         "rationale":   plan.get("rationale", ""),
         "pr_url":      pr.get("html_url", ""),
-        "outcome":     "pending",
+        "outcome":     "auto_applied" if auto_applied else "pending",
     })
 
     return {"statusCode": 200, "body": json.dumps({
-        "message": "PR opened",
+        "message": "PR auto-applied" if auto_applied else "PR opened",
         "incident_id": incident_id,
         "action": action,
         "changed_files": changes,
