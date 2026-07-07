@@ -15,6 +15,8 @@ variable "openai_secret_arn" {
 }
 
 # ── Trust policies ────────────────────────────────────────────────────────────
+data "aws_caller_identity" "current" {}
+
 data "aws_iam_policy_document" "assume_lambda" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -111,9 +113,20 @@ locals {
     outcome_validator = aws_iam_role.outcome_validator.name
   }
 
-  bedrock_model_arns = var.model_provider == "bedrock" ? [
-    "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.bedrock_model_id}"
-  ] : []
+  # Geo-prefixed model IDs (us./eu./apac.) are cross-region inference
+  # profiles: invocation needs the account-scoped profile ARN plus the
+  # underlying foundation-model ARN in every region the profile routes to.
+  bedrock_is_inference_profile = can(regex("^(us|eu|apac)\\.", var.bedrock_model_id))
+  bedrock_foundation_model_id  = replace(var.bedrock_model_id, "/^(us|eu|apac)\\./", "")
+
+  bedrock_model_arns = var.model_provider == "bedrock" ? (
+    local.bedrock_is_inference_profile ? [
+      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.bedrock_model_id}",
+      "arn:aws:bedrock:*::foundation-model/${local.bedrock_foundation_model_id}",
+    ] : [
+      "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.bedrock_model_id}"
+    ]
+  ) : []
   openai_secret_arns = var.openai_secret_arn != "" ? [var.openai_secret_arn] : []
   github_secret_arns = var.github_token_secret_arn != "" ? [var.github_token_secret_arn] : []
   llm_secret_arns    = var.model_provider == "openai" ? local.openai_secret_arns : []
