@@ -186,6 +186,24 @@ class TestLlmPlanFallback(unittest.TestCase):
         plan = app._llm_plan(self._bundle(), self._allowed())
         self.assertNotEqual(plan["action"], "delete_cluster")
 
+    def test_markdown_fenced_llm_plan_is_used(self):
+        app.MODEL_PROVIDER = "bedrock"
+        fenced = "```json\n" + json.dumps({
+            "action": "scale_replicas",
+            "target": {"service": "svc", "env": "staging"},
+            "params": {"replicas": 4},
+            "risk": "low",
+            "rationale": "Scale out to absorb load.",
+        }, indent=2) + "\n```"
+        mock_resp = MagicMock()
+        mock_resp["body"].read.return_value = json.dumps({
+            "content": [{"text": fenced}]
+        }).encode()
+        app.bedrock.invoke_model = MagicMock(return_value=mock_resp)
+        plan = app._llm_plan(self._bundle(), self._allowed())
+        self.assertEqual(plan["action"], "scale_replicas")
+        self.assertEqual(plan["rationale"], "Scale out to absorb load.")
+
 
 class TestPatchImageEdgeCases(unittest.TestCase):
     """Edge cases specific to the YAML-based _patch_image_deployment."""

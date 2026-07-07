@@ -106,6 +106,14 @@ AUTO_APPLY_MAX_PER_HOUR = int(os.environ.get("AUTO_APPLY_MAX_PER_HOUR", "3"))
 _token_cache: dict = {"value": None, "expires_at": 0.0}
 
 
+def _parse_llm_json(text: str) -> dict:
+    """Extract the JSON object from an LLM reply, tolerating markdown fences or prose."""
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError("no JSON object in LLM reply")
+    return json.loads(text[start:end + 1])
+
+
 def _audit_write(incident_id: str, record: dict) -> None:
     """Write a decision record to the audit log table. Fails silently."""
     if not AUDIT_TABLE_NAME:
@@ -395,7 +403,7 @@ Respond with valid JSON only:
             else:
                 text = raw
 
-        plan = json.loads(text)
+        plan = _parse_llm_json(text)
         if plan.get("action") not in allowed_actions:
             raise ValueError(f"LLM returned disallowed action: {plan.get('action')}")
         _log("info", "llm_plan_selected", action=plan.get("action"), risk=plan.get("risk"))

@@ -165,6 +165,24 @@ class TestHandlerActionValidation(unittest.TestCase):
             result = app.handler(_event(b), MagicMock())
         self.assertEqual(result["action"], "rollback_image")
 
+    def test_markdown_fenced_llm_action_is_returned(self):
+        b = _bundle()
+        plan = {
+            "action":       "rollback_image",
+            "params":       {"tag": "stable"},
+            "target":       {"service": "svc", "env": "staging"},
+            "reasoning":    "Bad deploy detected in Prometheus",
+            "alternatives": ["scale_replicas"],
+        }
+        fenced = f"```json\n{json.dumps(plan, indent=2)}\n```"
+        with (
+            patch.object(app.s3, "get_object", return_value=_mock_s3(b)),
+            patch.object(app, "_fetch_allowed_actions", return_value=_ALLOWED),
+            patch.object(app, "_call_llm", return_value=fenced),
+        ):
+            result = app.handler(_event(b), MagicMock())
+        self.assertEqual(result["action"], "rollback_image")
+
     def test_llm_missing_required_field_falls_back(self):
         b = _bundle()
         with (
