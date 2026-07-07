@@ -113,19 +113,24 @@ locals {
           group_interval  = "5m"
           repeat_interval = "4h"
         }
-        receivers = [{
-          name = "gitops-sentinel"
-          webhook_configs = [{
-            url           = var.webhook_url
-            send_resolved = false
-            http_config = {
-              authorization = {
-                type        = "Bearer"
-                credentials = var.webhook_secret
+        receivers = [
+          {
+            name = "null"
+          },
+          {
+            name = "gitops-sentinel"
+            webhook_configs = [{
+              url           = var.webhook_url
+              send_resolved = false
+              http_config = {
+                authorization = {
+                  type        = "Bearer"
+                  credentials = var.webhook_secret
+                }
               }
-            }
-          }]
-        }]
+            }]
+          }
+        ]
       }
     }
   }

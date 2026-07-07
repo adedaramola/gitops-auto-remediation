@@ -15,9 +15,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install kustomize
+        env:
+          KUSTOMIZE_VERSION: v5.4.3
         run: |
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          curl -fsSLo kustomize.tar.gz \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          tar -xzf kustomize.tar.gz kustomize
           sudo mv kustomize /usr/local/bin/kustomize
+          kustomize version
 
       - name: Build staging manifests
         run: kustomize build gitops/clusters/staging > /tmp/staging.yaml
@@ -62,7 +67,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: terraform-linters/setup-tflint@v4
         with:
-          tflint_version: latest
+          tflint_version: v0.53.0
       - name: Init tflint
         run: tflint --init
         working-directory: terraform

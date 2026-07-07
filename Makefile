@@ -73,10 +73,20 @@ tf-validate: ## Validate Terraform configuration
 .PHONY: demo-alert
 demo-alert: ## POST docs/demo-alert.json to $$WEBHOOK_URL (optional $$WEBHOOK_SECRET)
 	@test -n "$$WEBHOOK_URL" || (echo "Set WEBHOOK_URL to your Terraform output first." && exit 1)
-	curl -sS -X POST "$$WEBHOOK_URL" \
-		-H "Content-Type: application/json" \
-		$$(test -n "$$WEBHOOK_SECRET" && printf '%s' "-H X-Webhook-Secret: $$WEBHOOK_SECRET") \
-		--data @docs/demo-alert.json
+	@if [ -n "$$WEBHOOK_SECRET" ]; then \
+		curl -sS -X POST "$$WEBHOOK_URL" \
+			-H "Content-Type: application/json" \
+			-H "X-Webhook-Secret: $$WEBHOOK_SECRET" \
+			--data @docs/demo-alert.json; \
+	else \
+		curl -sS -X POST "$$WEBHOOK_URL" \
+			-H "Content-Type: application/json" \
+			--data @docs/demo-alert.json; \
+	fi
+
+.PHONY: demo-preflight
+demo-preflight: ## Verify Argo sync, demo-service readiness, and model access before a live demo
+	bash scripts/demo_preflight.sh
 
 # ── Lambda sync ───────────────────────────────────────────────────────────────
 .PHONY: sync-lambda

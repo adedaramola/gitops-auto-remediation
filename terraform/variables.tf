@@ -123,13 +123,6 @@ variable "kubernetes_api_ready_wait" {
   description = "Extra wait after EKS creation before Helm/Kubernetes resources are applied. Helps avoid Unauthorized races on fresh clusters."
 }
 
-# Optional: Amazon Managed Service for Prometheus (AMP) for outcome_validator queries
-variable "enable_amp" {
-  type    = bool
-  default = false
-}
-
-
 # Observability query endpoint (optional)
 # - For AMP, you may provide an AMP query endpoint URL with SigV4 signing (not implemented here).
 # - For self-managed Prometheus, expose Prometheus query API and provide its URL.
