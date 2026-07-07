@@ -43,6 +43,12 @@ variable "alarm_email" {
   description = "Optional email address subscribed to the pipeline alarms SNS topic. Requires confirming the subscription email after apply."
 }
 
+variable "monthly_budget_usd" {
+  type        = number
+  default     = 200
+  description = "Monthly AWS cost budget (account-wide). Notifies the alarms SNS topic at 80% actual and 100% forecasted spend."
+}
+
 variable "auto_apply_max_per_hour" {
   type        = number
   default     = 3

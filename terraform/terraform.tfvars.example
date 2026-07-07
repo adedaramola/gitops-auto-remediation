@@ -63,6 +63,10 @@ slack_webhook_url = ""  # e.g. "https://hooks.slack.com/services/T00/B00/xxxx"
 # You must confirm the subscription email AWS sends after apply.
 alarm_email = ""  # e.g. "oncall@example.com"
 
+# Monthly account-wide cost budget (USD). Notifies the alarms topic at
+# 80% actual and 15% forecasted spend (early warning for a running EKS cluster).
+monthly_budget_usd = 200
+
 # ─── Webhook security ─────────────────────────────────────────────────────────
 
 # Shared secret to authenticate Alertmanager webhook calls.

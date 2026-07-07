@@ -86,3 +86,67 @@ output "alarms_topic_arn" {
   value       = aws_sns_topic.alarms.arn
   description = "SNS topic all pipeline alarms notify. Subscribe email/Slack forwarders here."
 }
+
+# ── Monthly cost budget ───────────────────────────────────────────────────────
+# Account-wide (project-tag filtering would require activating cost allocation
+# tags in the billing console first). Mainly catches the EKS cluster being
+# left running after a demo.
+
+resource "aws_sns_topic_policy" "alarms" {
+  arn = aws_sns_topic.alarms.arn
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AccountOwnerDefault"
+        Effect    = "Allow"
+        Principal = { AWS = "*" }
+        Action = [
+          "SNS:Subscribe", "SNS:Receive", "SNS:Publish", "SNS:ListSubscriptionsByTopic",
+          "SNS:GetTopicAttributes", "SNS:SetTopicAttributes", "SNS:DeleteTopic",
+          "SNS:AddPermission", "SNS:RemovePermission",
+        ]
+        Resource  = aws_sns_topic.alarms.arn
+        Condition = { StringEquals = { "AWS:SourceOwner" = data.aws_caller_identity.current.account_id } }
+      },
+      {
+        Sid       = "AllowCloudWatchAlarms"
+        Effect    = "Allow"
+        Principal = { Service = "cloudwatch.amazonaws.com" }
+        Action    = "SNS:Publish"
+        Resource  = aws_sns_topic.alarms.arn
+      },
+      {
+        Sid       = "AllowBudgets"
+        Effect    = "Allow"
+        Principal = { Service = "budgets.amazonaws.com" }
+        Action    = "SNS:Publish"
+        Resource  = aws_sns_topic.alarms.arn
+      },
+    ]
+  })
+}
+
+resource "aws_budgets_budget" "monthly" {
+  name         = "${local.name}-monthly-cost"
+  budget_type  = "COST"
+  limit_amount = tostring(var.monthly_budget_usd)
+  limit_unit   = "USD"
+  time_unit    = "MONTHLY"
+
+  notification {
+    comparison_operator       = "GREATER_THAN"
+    threshold                 = 80
+    threshold_type            = "PERCENTAGE"
+    notification_type         = "ACTUAL"
+    subscriber_sns_topic_arns = [aws_sns_topic.alarms.arn]
+  }
+
+  notification {
+    comparison_operator       = "GREATER_THAN"
+    threshold                 = 15
+    threshold_type            = "PERCENTAGE"
+    notification_type         = "FORECASTED"
+    subscriber_sns_topic_arns = [aws_sns_topic.alarms.arn]
+  }
+}
