@@ -50,6 +50,8 @@ Terraform ignores value drift on this parameter, so an operator flip survives `t
 
 **Rate limit** — at most `auto_apply_max_per_hour` auto-merges per hour (default 3), tracked by an atomic counter in the audit table (`incident_id = rate#auto_apply`). Merges beyond the budget open PRs for review instead. Raise the limit in tfvars if legitimate remediations are being throttled.
 
+**Branch protection** — `main` requires all seven CI checks (validate-gitops, check-lambda-sync, terraform-validate, tflint, security-scan, unit-tests, policy-check) to pass before merging. `enforce_admins` is off, so repo admins can still push directly to main. Note: if the Decision Engine's GitHub token belongs to a repo admin, its API merges bypass pending checks (auto-apply merges immediately); with a non-admin token the merge is rejected until checks pass and the PR falls back to human review.
+
 ## Common failure modes
 
 | Symptom | Likely cause | Fix |

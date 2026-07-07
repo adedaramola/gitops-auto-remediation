@@ -1,9 +1,9 @@
 name: Policy Check (Allowed Actions)
 
+# Runs on every PR (no path filter): policy-check is a required status check
+# on main; PRs that touch no gitops files pass with 0 manifests checked.
 on:
   pull_request:
-    paths:
-      - "gitops/**"
 
 jobs:
   policy-check:

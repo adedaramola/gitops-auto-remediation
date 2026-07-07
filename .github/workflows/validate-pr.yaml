@@ -1,12 +1,9 @@
 name: Validate GitOps PR
 
+# Runs on every PR (no path filter): these jobs are required status checks on
+# main, and a required check that never reports blocks the PR forever.
 on:
   pull_request:
-    paths:
-      - "gitops/**"
-      - "observability/**"
-      - "lambdas/**"
-      - "terraform/**"
 
 jobs:
   validate-gitops:
