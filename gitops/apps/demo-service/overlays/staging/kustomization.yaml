@@ -1,10 +1,13 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: demo-staging
-patches:
-- patch: "- op: replace\n  path: /spec/replicas\n  value: 4"
-  target:
-    kind: Deployment
-    name: demo-service
 resources:
-- ../../base
+  - ../../base
+patches:
+  - target:
+      kind: Deployment
+      name: demo-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
