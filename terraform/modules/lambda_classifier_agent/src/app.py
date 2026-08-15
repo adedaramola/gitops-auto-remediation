@@ -112,6 +112,14 @@ def _call_llm(prompt: str) -> str:
         return data["content"][0]["text"] if isinstance(data.get("content"), list) else ""
 
 
+def _parse_llm_json(text: str) -> dict:
+    """Extract the JSON object from an LLM reply, tolerating markdown fences or prose."""
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError("no JSON object in LLM reply")
+    return json.loads(text[start:end + 1])
+
+
 def _heuristic_triage(bundle: dict) -> dict:
     """Fallback triage when LLM is unavailable."""
     severity = bundle.get("severity", "unknown").lower()
@@ -144,7 +152,7 @@ Respond with valid JSON only matching this schema:
 """
     try:
         text   = _call_llm(prompt)
-        result = json.loads(text)
+        result = _parse_llm_json(text)
         # Validate required fields
         for field in ("severity_class", "incident_type", "blast_radius", "priority", "key_signals"):
             if field not in result:

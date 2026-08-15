@@ -106,6 +106,14 @@ AUTO_APPLY_MAX_PER_HOUR = int(os.environ.get("AUTO_APPLY_MAX_PER_HOUR", "3"))
 _token_cache: dict = {"value": None, "expires_at": 0.0}
 
 
+def _parse_llm_json(text: str) -> dict:
+    """Extract the JSON object from an LLM reply, tolerating markdown fences or prose."""
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError("no JSON object in LLM reply")
+    return json.loads(text[start:end + 1])
+
+
 def _audit_write(incident_id: str, record: dict) -> None:
     """Write a decision record to the audit log table. Fails silently."""
     if not AUDIT_TABLE_NAME:
@@ -395,7 +403,7 @@ Respond with valid JSON only:
             else:
                 text = raw
 
-        plan = json.loads(text)
+        plan = _parse_llm_json(text)
         if plan.get("action") not in allowed_actions:
             raise ValueError(f"LLM returned disallowed action: {plan.get('action')}")
         _log("info", "llm_plan_selected", action=plan.get("action"), risk=plan.get("risk"))
@@ -444,6 +452,26 @@ def _annotate_pod_template(doc: dict, key: str, value: str) -> None:
         [key]) = value
 
 
+def _replica_count(plan: dict, allowed: dict) -> int:
+    """Normalize common planner parameter names and enforce policy bounds."""
+    params = plan.get("params") or {}
+    raw = params.get("replicas", params.get("desired_replicas"))
+    if raw is None:
+        raise ValueError("scale_replicas requires params.replicas")
+    replicas = int(raw)
+    action_policy = next(
+        (item for item in allowed.get("allowed_actions", [])
+         if item.get("action") == "scale_replicas"),
+        {},
+    )
+    constraints = action_policy.get("constraints") or {}
+    minimum = int(constraints.get("min", 1))
+    maximum = int(constraints.get("max", 10))
+    if not minimum <= replicas <= maximum:
+        raise ValueError(f"replica count {replicas} is outside allowed range {minimum}-{maximum}")
+    return replicas
+
+
 def _patch_image_deployment(deploy_yaml: str, new_tag: str, incident_id: str = "") -> str:
     """Parse the deployment YAML, replace the first container's image tag,
     and annotate the pod template with the incident id for log correlation."""
@@ -478,10 +506,31 @@ def handler(event, context):
     token = _get_github_token()
     allowed = _fetch_allowed_actions(token, ref="main")
 
-    plan = _llm_plan(bundle, allowed)
+    pipeline_plan = detail.get("remediation") or {}
+    if pipeline_plan.get("action"):
+        # The confidence scorer assessed this exact action. Reusing it prevents
+        # a second LLM call from dispatching an unscored remediation.
+        plan = {
+            "action": pipeline_plan["action"],
+            "params": pipeline_plan.get("params", {}),
+            "target": pipeline_plan.get("target", {}),
+            "risk": (detail.get("risk") or {}).get("risk_level", "unknown"),
+            "rationale": pipeline_plan.get("reasoning") or pipeline_plan.get("rationale", ""),
+        }
+        _log("info", "pipeline_plan_selected", action=plan["action"])
+    else:
+        plan = _llm_plan(bundle, allowed)
     action = plan["action"]
     env = (plan.get("target") or {}).get("env") or bundle.get("env", "staging")
     service = (plan.get("target") or {}).get("service") or bundle.get("service", "unknown")
+
+    if action == "no_action":
+        _log("info", "no_action_skipped", incident_id=incident_id, service=service, env=env)
+        return {"statusCode": 200, "body": json.dumps({
+            "message": "No remediation required",
+            "incident_id": incident_id,
+            "action": action,
+        })}
 
     branch = f"ai/{incident_id}-{action}"
     base_branch = "main"
@@ -536,7 +585,7 @@ Revert this PR.
         target_path = f"gitops/apps/{service}/overlays/{env}/kustomization.yaml"
         file_obj = _get_file(GITHUB_OWNER, GITHUB_REPO, target_path, base_branch, token)
         original = base64.b64decode(file_obj["content"]).decode("utf-8")
-        replicas = int(plan.get("params", {}).get("replicas", 3))
+        replicas = _replica_count(plan, allowed)
         patched = _patch_replicas_kustomize(original, replicas).encode("utf-8")
         _put_file(GITHUB_OWNER, GITHUB_REPO, target_path,
                   f"{incident_id}: scale replicas", patched, file_obj["sha"], branch, token)

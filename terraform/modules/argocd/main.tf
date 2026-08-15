@@ -1,4 +1,3 @@
-variable "project_name" { type = string }
 variable "github_owner" { type = string }
 variable "github_repo" { type = string }
 variable "gitops_repo_revision" {
@@ -75,10 +74,25 @@ resource "helm_release" "argocd" {
   version          = "9.5.15"
   namespace        = "argocd"
   create_namespace = true
+}
+
+# The Application CRs cannot ship as extraObjects of the argo-cd release:
+# Helm validates the whole manifest before the Argo CRDs exist. Applying them
+# as a second release makes the CRDs available at validation time.
+resource "helm_release" "bootstrap_applications" {
+  count = var.bootstrap_applications ? 1 : 0
+
+  name       = "argo-cd-applications"
+  repository = "https://bedag.github.io/helm-charts"
+  chart      = "raw"
+  version    = "2.0.0"
+  namespace  = "argocd"
 
   values = [
     yamlencode({
-      extraObjects = var.bootstrap_applications ? local.extra_objects : []
+      resources = local.extra_objects
     })
   ]
+
+  depends_on = [helm_release.argocd]
 }

@@ -186,6 +186,24 @@ class TestLlmPlanFallback(unittest.TestCase):
         plan = app._llm_plan(self._bundle(), self._allowed())
         self.assertNotEqual(plan["action"], "delete_cluster")
 
+    def test_markdown_fenced_llm_plan_is_used(self):
+        app.MODEL_PROVIDER = "bedrock"
+        fenced = "```json\n" + json.dumps({
+            "action": "scale_replicas",
+            "target": {"service": "svc", "env": "staging"},
+            "params": {"replicas": 4},
+            "risk": "low",
+            "rationale": "Scale out to absorb load.",
+        }, indent=2) + "\n```"
+        mock_resp = MagicMock()
+        mock_resp["body"].read.return_value = json.dumps({
+            "content": [{"text": fenced}]
+        }).encode()
+        app.bedrock.invoke_model = MagicMock(return_value=mock_resp)
+        plan = app._llm_plan(self._bundle(), self._allowed())
+        self.assertEqual(plan["action"], "scale_replicas")
+        self.assertEqual(plan["rationale"], "Scale out to absorb load.")
+
 
 class TestPatchImageEdgeCases(unittest.TestCase):
     """Edge cases specific to the YAML-based _patch_image_deployment."""
@@ -259,6 +277,28 @@ patches:
         import yaml as _yaml
         result = app._patch_replicas_kustomize(KUSTOMIZE_WITH_REPLICAS, 4)
         _yaml.safe_load(result)
+
+
+class TestReplicaParameterNormalization(unittest.TestCase):
+    def setUp(self):
+        self.allowed = {"allowed_actions": [{
+            "action": "scale_replicas",
+            "constraints": {"min": 1, "max": 10},
+        }]}
+
+    def test_accepts_canonical_replicas_parameter(self):
+        self.assertEqual(app._replica_count({"params": {"replicas": 4}}, self.allowed), 4)
+
+    def test_accepts_desired_replicas_alias(self):
+        self.assertEqual(app._replica_count({"params": {"desired_replicas": 2}}, self.allowed), 2)
+
+    def test_missing_replica_parameter_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "requires params.replicas"):
+            app._replica_count({"params": {}}, self.allowed)
+
+    def test_policy_bounds_are_enforced(self):
+        with self.assertRaisesRegex(ValueError, "outside allowed range"):
+            app._replica_count({"params": {"replicas": 11}}, self.allowed)
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +392,61 @@ class TestHandlerIdempotency(unittest.TestCase):
         body = json.loads(resp["body"])
         self.assertEqual(body["message"], "PR already exists")
         self.assertEqual(body["pr_number"], 3)
+
+
+class TestPipelinePlanConsistency(unittest.TestCase):
+    """The action scored upstream is the only action the engine may execute."""
+
+    def test_pipeline_plan_is_reused_without_second_llm_call(self):
+        bundle = {"incident_id": "inc-consistency", "service": "demo-service",
+                  "env": "staging", "prometheus": {}}
+        app.s3.get_object.return_value = _make_s3_body(bundle)
+        pipeline_plan = {
+            "action": "scale_replicas",
+            "target": {"service": "demo-service", "env": "staging"},
+            "params": {"replicas": 4},
+            "reasoning": "Replica shortage confirmed.",
+        }
+        with (
+            patch.object(app, "_get_github_token", return_value="tok"),
+            patch.object(app, "_fetch_allowed_actions", return_value={}),
+            patch.object(app, "_llm_plan") as mock_llm,
+            patch.object(app, "_find_existing_pr", return_value=None),
+            patch.object(app, "_get_ref_sha", return_value="base-sha"),
+            patch.object(app, "_create_branch", return_value={}),
+            patch.object(app, "_get_file", return_value=_kustomize_file_obj()),
+            patch.object(app, "_put_file", return_value={}),
+            patch.object(app, "_open_pr", return_value={"number": 12, "html_url": "https://github.com/pr/12"}),
+            patch.object(app, "_audit_write"),
+        ):
+            resp = app.handler({"detail": {
+                "s3_bucket": "b",
+                "s3_key": "k",
+                "remediation": pipeline_plan,
+                "risk": {"recommendation": "open_pr", "risk_level": "medium"},
+            }}, MagicMock())
+
+        mock_llm.assert_not_called()
+        self.assertEqual(json.loads(resp["body"])["action"], "scale_replicas")
+
+    def test_no_action_never_opens_a_pr(self):
+        bundle = {"incident_id": "inc-noop", "service": "demo-service",
+                  "env": "staging", "prometheus": {}}
+        app.s3.get_object.return_value = _make_s3_body(bundle)
+        with (
+            patch.object(app, "_get_github_token", return_value="tok"),
+            patch.object(app, "_fetch_allowed_actions", return_value={}),
+            patch.object(app, "_open_pr") as mock_open_pr,
+        ):
+            resp = app.handler({"detail": {
+                "s3_bucket": "b",
+                "s3_key": "k",
+                "remediation": {"action": "no_action", "reasoning": "False positive"},
+                "risk": {"recommendation": "escalate", "risk_level": "low"},
+            }}, MagicMock())
+
+        mock_open_pr.assert_not_called()
+        self.assertEqual(json.loads(resp["body"])["message"], "No remediation required")
 
 
 class TestHandlerRollbackImage(unittest.TestCase):

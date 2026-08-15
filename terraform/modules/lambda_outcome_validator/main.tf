@@ -1,6 +1,5 @@
 variable "project_name" { type = string }
 variable "role_arn" { type = string }
-variable "aws_region" { type = string }
 variable "cluster_name" { type = string }
 variable "prometheus_query_url" { type = string }
 variable "slack_webhook_url" { type = string }

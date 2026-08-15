@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 
 import boto3
@@ -89,7 +90,6 @@ GITHUB_TOKEN_SECRET_ARN = os.environ.get("GITHUB_APP_TOKEN_SECRET_ARN", "")
 ALLOWED_ACTIONS_PATH    = os.environ.get("ALLOWED_ACTIONS_PATH", "gitops/policies/allowed-actions.yaml")
 
 # ── GitHub token cache ────────────────────────────────────────────────────────
-import time
 _token_cache: dict = {"value": None, "expires_at": 0.0}
 
 
@@ -140,8 +140,16 @@ def _call_llm(prompt: str) -> str:
         return data["content"][0]["text"] if isinstance(data.get("content"), list) else ""
 
 
+def _parse_llm_json(text: str) -> dict:
+    """Extract the JSON object from an LLM reply, tolerating markdown fences or prose."""
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError("no JSON object in LLM reply")
+    return json.loads(text[start:end + 1])
+
+
 _REMEDIATION_SCHEMA = """{
-  "action":       "<chosen action from allowed_actions>",
+  "action":       "<chosen action from allowed_actions, or no_action when no incident is present>",
   "params":       {},
   "target":       {"service": "<string>", "env": "<string>"},
   "reasoning":    "<step-by-step reasoning for this choice>",
@@ -186,6 +194,10 @@ Incident context (JSON):
 
 Rules:
 - Only choose from the allowed_actions list
+- If the evidence shows no real incident or no safe change is warranted, choose "no_action"
+- For scale_replicas, params must contain {{"replicas": <integer>}}
+- For rollback_image, params must contain {{"tag": "<allowed image tag>"}}
+- For tune_resources, params may contain {{"cpu": "<quantity>", "memory": "<quantity>"}}
 - Prefer the least disruptive action that addresses the root cause
 - Explain your reasoning step by step
 
@@ -194,8 +206,20 @@ Respond with valid JSON only matching this schema:
 """
     try:
         text   = _call_llm(prompt)
-        result = json.loads(text)
-        if result.get("action") not in allowed_actions:
+        result = _parse_llm_json(text)
+        proposed_action = str(result.get("action", "")).strip().lower()
+        if proposed_action in {"none", "no_action"}:
+            # A verified false positive must never be converted into a
+            # mutating fallback action merely because it is not a GitOps action.
+            result["action"] = "no_action"
+            result.setdefault("params", {})
+            result.setdefault("target", {
+                "service": bundle.get("service", "unknown"),
+                "env": bundle.get("env", "staging"),
+            })
+            result.setdefault("reasoning", "No remediation is warranted by the available evidence.")
+            result.setdefault("alternatives", [])
+        elif proposed_action not in allowed_actions:
             raise ValueError(f"Proposed action '{result.get('action')}' not in allowed list")
         for field in ("action", "params", "target", "reasoning"):
             if field not in result:

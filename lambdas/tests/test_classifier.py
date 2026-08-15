@@ -158,6 +158,24 @@ class TestHandlerHappyPath(unittest.TestCase):
         self.assertEqual(result["incident_type"],  "HighErrorRate")
         self.assertEqual(result["priority"],       1)
 
+    def test_markdown_fenced_llm_response_is_used(self):
+        b = _bundle("critical")
+        llm_response = {
+            "severity_class": "critical",
+            "incident_type":  "HighErrorRate",
+            "blast_radius":   "broad",
+            "priority":       1,
+            "key_signals":    ["error_rate=0.9"],
+        }
+        fenced = f"```json\n{json.dumps(llm_response, indent=2)}\n```"
+        with (
+            patch.object(app.s3, "get_object", return_value=_mock_s3(b)),
+            patch.object(app, "_call_llm", return_value=fenced),
+        ):
+            result = app.handler(_s3_event(), MagicMock())
+        self.assertEqual(result["incident_type"], "HighErrorRate")
+        self.assertEqual(result["priority"],      1)
+
 
 if __name__ == "__main__":
     unittest.main()

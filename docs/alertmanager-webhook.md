@@ -15,7 +15,9 @@ alertmanager:
       receiver: sentinel-webhook
 ```
 
-The webhook sends JSON to the Signal Collector Lambda. It deduplicates, enriches with Prometheus/k8s context, writes a signal bundle to S3, and emits a `SignalBundled` EventBridge event that triggers the Decision Engine.
+The webhook sends JSON to the Signal Collector Lambda. It deduplicates, enriches with Prometheus/k8s context, writes a signal bundle to S3, and emits:
+- `SignalBundled` when `enable_multi_agent = false` and the single-agent Decision Engine path should run
+- `SentinelPipelineTriggered` when `enable_multi_agent = true` and the Step Functions pipeline should run
 
 ## MVP demo trigger
 

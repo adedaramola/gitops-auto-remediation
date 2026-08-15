@@ -114,6 +114,14 @@ def _call_llm(prompt: str) -> str:
         return data["content"][0]["text"] if isinstance(data.get("content"), list) else ""
 
 
+def _parse_llm_json(text: str) -> dict:
+    """Extract the JSON object from an LLM reply, tolerating markdown fences or prose."""
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError("no JSON object in LLM reply")
+    return json.loads(text[start:end + 1])
+
+
 def _heuristic_diagnosis(bundle: dict, triage: dict) -> dict:
     """Fallback diagnosis when LLM is unavailable."""
     incident_type = triage.get("incident_type", "Unknown")
@@ -162,7 +170,7 @@ Respond with valid JSON only matching this schema:
 """
     try:
         text   = _call_llm(prompt)
-        result = json.loads(text)
+        result = _parse_llm_json(text)
         for field in ("root_cause", "contributing_factors", "affected_components", "diagnosis_confidence"):
             if field not in result:
                 raise ValueError(f"Missing field: {field}")

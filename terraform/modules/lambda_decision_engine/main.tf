@@ -10,7 +10,6 @@ variable "openai_secret_arn" {
 }
 variable "model_provider" { type = string }
 variable "bedrock_model_id" { type = string }
-variable "aws_region" { type = string }
 variable "cluster_name" { type = string }
 variable "prometheus_query_url" { type = string }
 variable "audit_table_name" { type = string }

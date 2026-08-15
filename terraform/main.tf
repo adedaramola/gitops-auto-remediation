@@ -80,7 +80,6 @@ resource "time_sleep" "kubernetes_api_ready" {
 ########################
 module "argocd" {
   source                 = "./modules/argocd"
-  project_name           = local.name
   github_owner           = var.github_owner
   github_repo            = var.github_repo
   gitops_repo_revision   = var.gitops_repo_revision
@@ -92,7 +91,6 @@ module "argocd" {
 module "observability" {
   source               = "./modules/observability"
   project_name         = local.name
-  cluster_name         = var.cluster_name
   aws_region           = var.aws_region
   oidc_provider_arn    = module.eks.oidc_provider_arn
   oidc_provider        = replace(module.eks.cluster_oidc_issuer_url, "https://", "")
@@ -118,8 +116,7 @@ module "log_shipping" {
 }
 
 module "gatekeeper" {
-  source       = "./modules/gatekeeper"
-  project_name = local.name
+  source = "./modules/gatekeeper"
 
   depends_on = [time_sleep.kubernetes_api_ready]
 }
@@ -343,7 +340,6 @@ module "signal_collector_lambda" {
   incident_bucket_name           = module.signals_bucket.bucket_name
   event_bus_name                 = module.eventing.event_bus_name
   role_arn                       = module.iam.signal_collector_role_arn
-  aws_region                     = var.aws_region
   cluster_name                   = var.cluster_name
   prometheus_query_url           = local.prometheus_query_url_effective
   enable_k8s_readonly_enrichment = var.enable_k8s_readonly_enrichment
@@ -366,7 +362,6 @@ module "decision_engine_lambda" {
   openai_secret_arn       = var.openai_secret_arn
   model_provider          = var.model_provider
   bedrock_model_id        = var.bedrock_model_id
-  aws_region              = var.aws_region
   cluster_name            = var.cluster_name
   prometheus_query_url    = var.prometheus_query_url
   audit_table_name        = module.audit_log.table_name
@@ -379,7 +374,6 @@ module "outcome_validator_lambda" {
   source                  = "./modules/lambda_outcome_validator"
   project_name            = local.name
   role_arn                = module.iam.outcome_validator_role_arn
-  aws_region              = var.aws_region
   cluster_name            = var.cluster_name
   prometheus_query_url    = local.prometheus_query_url_effective
   slack_webhook_url       = var.slack_webhook_url

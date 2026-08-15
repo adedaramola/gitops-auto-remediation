@@ -131,7 +131,7 @@ Outcome Validator Lambda
 ## Prerequisites
 
 - AWS CLI v2, configured with sufficient IAM permissions
-- Terraform >= 1.5
+- Terraform >= 1.10
 - kubectl >= 1.28, Helm >= 3.12
 - Argo CD CLI (`brew install argocd`)
 - GitHub CLI (`brew install gh`)
@@ -152,9 +152,11 @@ Fork `adedaramola/gitops-auto-remediation` to your GitHub account. The Decision 
 
 For the normal demo path, prefer Terraform Argo bootstrap over manual manifest edits. Set `github_owner`, `github_repo`, and `bootstrap_argocd_applications = true` in `terraform/terraform.tfvars`.
 
-### 2. Create GitHub PAT
+### 2. Create a GitHub token secret
 
-Classic PAT with `repo` scope. Store in Secrets Manager:
+For the MVP, a classic PAT with `repo` scope is fine. If you already have a GitHub App installation-token flow, that works too. The Lambda only requires a bearer token stored in Secrets Manager as `{ "token": "..." }`.
+
+Example:
 
 ```bash
 aws secretsmanager create-secret \
@@ -187,6 +189,9 @@ github_token_secret_arn = "arn:aws:secretsmanager:us-east-1:ACCOUNT:secret:gitop
 model_provider          = "bedrock"
 vpc_cidr                = "10.20.0.0/16"
 az_count                = 2
+alarm_email             = "oncall@example.com"
+monthly_budget_usd      = 200
+auto_apply_max_per_hour = 3
 webhook_secret          = "$(openssl rand -hex 32)"  # replace with actual value
 enable_multi_agent      = false
 ```
@@ -197,11 +202,13 @@ Use `enable_multi_agent = false` for the safest repeatable demo. Switch it to `t
 
 ```bash
 cd terraform
-terraform init
+terraform init -reconfigure
 terraform apply -auto-approve
 ```
 
 EKS provisioning takes ~10 minutes. On completion you'll have the `webhook_url` and all other outputs.
+
+Because the repo now includes an S3 backend with `use_lockfile = true`, create or update the bucket settings in `terraform/backend.tf` before the first init if you are deploying into a different AWS account.
 
 **Known issue:** Helm installs (Argo CD, Gatekeeper, observability) may fail on the first apply because the Kubernetes API is not yet reachable when Terraform's Helm provider initialises. Fix:
 
@@ -416,7 +423,7 @@ The `notify-action-dispatched.yaml` workflow bridges GitHub (where the PR merge 
 - **X-Ray tracing** — enabled on all Lambda functions; trace the full execution path in the AWS Console
 - **DynamoDB Audit Log** — `gitops-auto-remediation-decision-audit` table; every decision stored with 90-day TTL
 - **EventBridge DLQ** — failed EventBridge deliveries land in an SQS dead letter queue (`gitops-auto-remediation-eventbridge-dlq`) with 14-day retention
-- **Alerting** — CloudWatch metric filters on `webhook_auth_failed`, `dedup_write_failed`, `audit_write_failed`, `auto_revert_failed`, Lambda ERROR count, and EventBridge DLQ depth; wire `var.alarm_actions` to an SNS topic to receive pages
+- **Alerting** — CloudWatch metric filters on `webhook_auth_failed`, `dedup_write_failed`, `audit_write_failed`, `auto_revert_failed`, plus Lambda runtime alarms, Step Functions failure/timeout alarms, EventBridge DLQ depth alarms, and a monthly AWS budget notification; all notify the built-in SNS alarms topic and any extra `var.alarm_actions`
 - **Grafana** — pipeline-health dashboard (incidents, dedup, PRs, outcomes, confidence routing, Lambda errors, SFN failures, DLQ depth) auto-provisioned via ConfigMap; CloudWatch datasource with IRSA for cross-pillar pivot
 
 ---
@@ -430,8 +437,8 @@ The `notify-action-dispatched.yaml` workflow bridges GitHub (where the PR merge 
 | `prometheus_query_url` is empty by default | Outcome Validator cannot verify recovery and will emit `OutcomeFailed` until Prometheus is reachable | Connect real Prometheus or AMP |
 | Gatekeeper ConstraintTemplate must be synced before Constraint | Manual step required on fresh Argo CD setup | Add Argo CD sync waves via `argocd.argoproj.io/sync-wave` annotations |
 | No Alertmanager integration test | You have to fire test alerts manually | Add a `make test-alert` Makefile target or a test receiver in Alertmanager config |
-| GitHub PAT is a long-lived credential | Security risk | Migrate to GitHub App installation token flow (token cache already implemented in Decision Engine) |
-| Lambda token cache (5-min TTL) not invalidated when Secrets Manager is updated | After rotating a PAT, the Lambda serves stale credentials for up to 5 minutes | Force a cold start immediately by updating any env var: `aws lambda update-function-configuration --function-name gitops-auto-remediation-decision-engine --environment "$(aws lambda get-function-configuration --function-name gitops-auto-remediation-decision-engine --query 'Environment' --output json \| python3 -c "import json,sys,time; e=json.load(sys.stdin); e['Variables']['CACHE_BUST']=str(time.time()); print(json.dumps(e))")"` |
+| Long-lived GitHub PAT | Security risk | Prefer a GitHub App installation-token flow if you move beyond the MVP |
+| Lambda token cache (5-min TTL) not invalidated when Secrets Manager is updated | After rotating the GitHub token, the Lambda serves stale credentials for up to 5 minutes | Force a cold start immediately by updating any env var: `aws lambda update-function-configuration --function-name gitops-auto-remediation-decision-engine --environment "$(aws lambda get-function-configuration --function-name gitops-auto-remediation-decision-engine --query 'Environment' --output json \| python3 -c "import json,sys,time; e=json.load(sys.stdin); e['Variables']['CACHE_BUST']=str(time.time()); print(json.dumps(e))")"` |
 | `lambdas/*/app.py` and `terraform/modules/lambda_*/src/app.py` can drift | CI fails the sync check, and contributors may be unsure which source tree is authoritative | Run `make sync-lambda` after changing Lambda code and commit both paths |
 | `allowed-actions.yaml` must not be listed in `gitops/policies/kustomization.yaml` as a resource | It is a Lambda config file, not a Kubernetes manifest — kustomize will reject it with `missing Resource metadata` | Only Gatekeeper manifests belong in that kustomization's `resources:` list. `allowed-actions.yaml` is fetched directly from GitHub by the Decision Engine at runtime via the GitHub Contents API |
 

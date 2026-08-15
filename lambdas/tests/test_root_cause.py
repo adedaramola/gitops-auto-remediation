@@ -187,6 +187,23 @@ class TestHandlerHappyPath(unittest.TestCase):
         self.assertEqual(result["root_cause"], "Memory leak in payment service")
         self.assertEqual(result["diagnosis_confidence"], 82)
 
+    def test_markdown_fenced_llm_response_is_used(self):
+        b = _bundle()
+        llm_response = {
+            "root_cause":           "Memory leak in payment service",
+            "contributing_factors": ["high GC pressure"],
+            "affected_components":  ["svc"],
+            "diagnosis_confidence": 82,
+        }
+        fenced = f"```json\n{json.dumps(llm_response, indent=2)}\n```"
+        with (
+            patch.object(app.s3, "get_object", return_value=_mock_s3(b)),
+            patch.object(app, "_call_llm", return_value=fenced),
+        ):
+            result = app.handler(_event(), MagicMock())
+        self.assertEqual(result["root_cause"], "Memory leak in payment service")
+        self.assertEqual(result["diagnosis_confidence"], 82)
+
 
 if __name__ == "__main__":
     unittest.main()

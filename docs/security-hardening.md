@@ -5,11 +5,11 @@ Recommended hardening steps before running in production.
 ## API Gateway
 - Add HMAC webhook secret (`webhook_secret` variable) — already implemented in Signal Collector
 - Add AWS WAF rule group to the API Gateway stage
-- Enable throttling and rate limiting
+- Enable stricter API Gateway throttling and rate limiting; only the auto-apply merge path has a built-in hourly limiter today
 - Validate payload schema at the gateway level
 
 ## GitHub Authentication
-- Replace static PAT with GitHub App installation token flow — already implemented (token cache in Decision Engine)
+- The runtime accepts any bearer token stored as `{ "token": "..." }` in Secrets Manager. For production, prefer a GitHub App installation-token flow over a long-lived PAT.
 - Restrict app permissions to:
   - `Contents: write` (only necessary paths)
   - `Pull requests: write`
@@ -22,6 +22,7 @@ Recommended hardening steps before running in production.
 
 ## Data
 - Use KMS CMK for S3 signal bundles and Secrets Manager secrets
+- Encrypt the Terraform remote-state bucket and block public access if you keep the default S3 backend
 - Lock down S3 bucket policy to Signal Collector Lambda ARN only
 - Consider encrypting signal bundles — they contain alert labels that may include service names and environments
 
@@ -33,4 +34,5 @@ Recommended hardening steps before running in production.
 ## Audit & Observability
 - DynamoDB Audit Log records every decision with 90-day TTL — extend retention via DynamoDB Streams → S3 if required
 - X-Ray tracing enabled on all Lambda functions — review traces in AWS Console after each incident
-- Enable SQS DLQ CloudWatch alarms to catch failed EventBridge deliveries
+- CloudWatch alarms already cover Lambda runtime failures, Step Functions failures/timeouts, and EventBridge DLQ depth; subscribe the SNS alarms topic to your paging path
+- AWS Budgets already publishes monthly cost notifications to the same SNS alarms topic; tune `monthly_budget_usd` to your actual spend tolerance

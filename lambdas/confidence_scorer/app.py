@@ -161,7 +161,13 @@ def handler(event, context):
          action=remediation.get("action"), diagnosis_confidence=diagnosis.get("diagnosis_confidence"))
 
     confidence_score, risk_level, risk_factors = _score(triage, diagnosis, remediation)
-    recommendation = _recommend(confidence_score, risk_level)
+    if remediation.get("action") == "no_action":
+        # Step Functions' escalate branch performs no GitHub mutation. This is
+        # the safe terminal route for false positives and inconclusive signals.
+        recommendation = "escalate"
+        risk_factors.append("no_action_requested")
+    else:
+        recommendation = _recommend(confidence_score, risk_level)
 
     _put_metric("ConfidenceScore", value=float(confidence_score), unit="None")
     _put_metric("RoutingDecision", Decision=recommendation)

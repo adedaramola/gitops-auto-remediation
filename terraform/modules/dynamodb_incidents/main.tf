@@ -1,18 +1,16 @@
 variable "project_name" { type = string }
 
 resource "aws_dynamodb_table" "this" {
+  # dedup_key must be the entire primary key: the signal collector's
+  # conditional put relies on one item per dedup_key. A created_at range
+  # key would make every put a distinct item and disable dedup.
   name         = "${var.project_name}-incidents"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "dedup_key"
-  range_key    = "created_at"
 
   attribute {
     name = "dedup_key"
     type = "S"
-  }
-  attribute {
-    name = "created_at"
-    type = "N"
   }
 
   ttl {
