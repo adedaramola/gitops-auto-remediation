@@ -6,7 +6,7 @@
 - Deduplicates signals via DynamoDB conditional write (30-min TTL window)
 - Enriches with Prometheus snapshot queries and Kubernetes events (optional, read-only)
 - Writes signal bundle to S3
-- Emits `SignalBundled` or `AutoRemediationPipelineTriggered` to EventBridge
+- Emits `SignalBundled` or `SentinelPipelineTriggered` to EventBridge
 
 ## decision_engine
 - Triggered by `SignalBundled` (single-agent path)
@@ -14,6 +14,7 @@
 - Loads `allowed-actions.yaml` contract from GitOps repo
 - Chooses a remediation action via Bedrock (default) or OpenAI, with heuristic fallback
 - Checks for existing PR (idempotency) before opening a new one
+- Auto-merges only when the `auto_apply` route passes the SSM kill switch and hourly rate-limit guardrails
 - Writes `action_dispatched` record to DynamoDB Audit Log
 
 ## outcome_validator

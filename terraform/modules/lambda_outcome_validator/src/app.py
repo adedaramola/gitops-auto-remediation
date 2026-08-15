@@ -265,7 +265,10 @@ def _extract_incident_id(detail: dict):
 def _find_ai_pr_for_incident(token: str, incident_id: str):
     q = f'repo:{GITHUB_OWNER}/{GITHUB_REPO} "{incident_id}" in:title type:pr'
     res = _gh("GET", "/search/issues", token, params={"q": q})
-    items = res.get("items", [])
+    items = [
+        item for item in res.get("items", [])
+        if not str(item.get("title", "")).lower().startswith("revert remediation")
+    ]
     if not items:
         return None
     items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
@@ -325,6 +328,16 @@ def _open_pr(token: str, title: str, body: str, head: str, base: str):
     })
 
 
+def _find_open_pr_for_branch(token: str, branch: str):
+    prs = _gh(
+        "GET",
+        f"/repos/{GITHUB_OWNER}/{GITHUB_REPO}/pulls",
+        token,
+        params={"head": f"{GITHUB_OWNER}:{branch}", "state": "open"},
+    )
+    return prs[0] if prs else None
+
+
 def _auto_revert(token: str, incident_id: str):
     pr_item = _find_ai_pr_for_incident(token, incident_id)
     if not pr_item:
@@ -333,6 +346,10 @@ def _auto_revert(token: str, incident_id: str):
     pr_number = pr_item["number"]
     pr = _gh("GET", f"/repos/{GITHUB_OWNER}/{GITHUB_REPO}/pulls/{pr_number}", token)
     base_branch = pr["base"]["ref"]
+    # GitHub's base.sha records the repository state before the remediation
+    # merge. Reading current main here would copy the remediated content and
+    # produce a no-op revert.
+    original_base_ref = pr.get("base", {}).get("sha") or base_branch
     base_sha = _get_ref_sha(token, f"heads/{base_branch}")
 
     branch = f"ai/revert-{incident_id}"
@@ -347,7 +364,7 @@ def _auto_revert(token: str, incident_id: str):
     restored = []
     for path in changed_paths:
         try:
-            base_obj = _get_file(token, path, base_branch)
+            base_obj = _get_file(token, path, original_base_ref)
             base_content = base64.b64decode(base_obj["content"])
             try:
                 cur_obj = _get_file(token, path, branch)
@@ -377,7 +394,9 @@ def _auto_revert(token: str, incident_id: str):
         + "\n- ".join(restored)
     )
 
-    revert_pr = _open_pr(token, title, body, head=branch, base=base_branch)
+    revert_pr = _find_open_pr_for_branch(token, branch)
+    if not revert_pr:
+        revert_pr = _open_pr(token, title, body, head=branch, base=base_branch)
     _log("info", "revert_pr_opened", incident_id=incident_id,
          pr_number=revert_pr.get("number"), pr_url=revert_pr.get("html_url"))
     return {

@@ -56,7 +56,7 @@ Terraform ignores value drift on this parameter, so an operator flip survives `t
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Decision Engine can't open PR | GitHub token secret wrong format or missing permissions | Check secret JSON: `{ "token": "ghp_..." }`, ensure `contents:write` + `pull_requests:write` |
+| Decision Engine can't open PR | GitHub token secret wrong format or missing permissions | Check secret JSON: `{ "token": "..." }`, ensure the token has `contents:write` + `pull_requests:write` access |
 | Outcome Validator cannot verify recovery and emits `OutcomeFailed` | `PROMETHEUS_QUERY_URL` not set or not reachable | Set `prometheus_query_url` in tfvars, confirm the endpoint is reachable, and redeploy |
 | Gatekeeper rejects change | Action outside `allowed-actions.yaml` bounds | Expected — add action to the allowed list if intentional |
 | Signal dedup suppressing alerts | DynamoDB TTL not expired (30-min window) | Wait for TTL or manually delete the dedup record |

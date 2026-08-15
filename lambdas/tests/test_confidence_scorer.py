@@ -158,6 +158,14 @@ class TestHandler(unittest.TestCase):
         result = app.handler(_event(severity="medium", blast="contained", confidence=55), MagicMock())
         self.assertEqual(result["recommendation"], "open_pr")
 
+    def test_no_action_always_routes_to_non_mutating_escalation(self):
+        result = app.handler(
+            _event(severity="low", blast="isolated", action="no_action", confidence=100),
+            MagicMock(),
+        )
+        self.assertEqual(result["recommendation"], "escalate")
+        self.assertIn("no_action_requested", result["risk_factors"])
+
 
 if __name__ == "__main__":
     unittest.main()

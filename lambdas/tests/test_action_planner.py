@@ -165,6 +165,23 @@ class TestHandlerActionValidation(unittest.TestCase):
             result = app.handler(_event(b), MagicMock())
         self.assertEqual(result["action"], "rollback_image")
 
+    def test_none_action_is_preserved_as_safe_no_action(self):
+        b = _bundle()
+        with (
+            patch.object(app.s3, "get_object", return_value=_mock_s3(b)),
+            patch.object(app, "_fetch_allowed_actions", return_value=_ALLOWED),
+            patch.object(app, "_call_llm", return_value=json.dumps({
+                "action": "none",
+                "params": {},
+                "target": {"service": "svc", "env": "staging"},
+                "reasoning": "Telemetry confirms this is a false positive.",
+                "alternatives": [],
+            })),
+        ):
+            result = app.handler(_event(b), MagicMock())
+        self.assertEqual(result["action"], "no_action")
+        self.assertEqual(result["reasoning"], "Telemetry confirms this is a false positive.")
+
     def test_markdown_fenced_llm_action_is_returned(self):
         b = _bundle()
         plan = {

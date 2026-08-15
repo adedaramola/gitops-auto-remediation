@@ -48,7 +48,7 @@ Before you start, make sure you have the following installed and configured on y
 | Tool | Version | Install |
 |---|---|---|
 | AWS CLI | v2 | https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html |
-| Terraform | >= 1.5 | https://developer.hashicorp.com/terraform/install |
+| Terraform | >= 1.10 | https://developer.hashicorp.com/terraform/install |
 | kubectl | >= 1.28 | https://kubernetes.io/docs/tasks/tools/ |
 | Helm | >= 3.12 | https://helm.sh/docs/intro/install/ |
 | Argo CD CLI | latest | `brew install argocd` |
@@ -143,9 +143,11 @@ cd ..  # back to repo root
 
 ---
 
-## Step 4 — Create a GitHub Personal Access Token (PAT)
+## Step 4 — Create a GitHub Token
 
-The Decision Engine Lambda needs to open pull requests on your behalf.
+The Decision Engine Lambda needs a GitHub bearer token so it can open pull requests on your behalf.
+
+For the MVP, a classic PAT with `repo` scope is the simplest option. If you already have a GitHub App installation-token flow, that works too because the runtime just reads `{ "token": "..." }` from Secrets Manager.
 
 1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)**
 2. Click **Generate new token (classic)**
@@ -159,13 +161,13 @@ The Decision Engine Lambda needs to open pull requests on your behalf.
 
 ## Step 5 — Create the GitHub Token Secret in AWS
 
-Store the PAT in AWS Secrets Manager so the Lambda can retrieve it securely:
+Store the token in AWS Secrets Manager so the Lambda can retrieve it securely:
 
 ```bash
 aws secretsmanager create-secret \
   --name "gitops-auto-remediation/github-token" \
-  --description "GitHub PAT for GitOps Auto-Remediation PR creation" \
-  --secret-string '{"token":"YOUR_PAT_HERE"}' \
+  --description "GitHub token for GitOps Auto-Remediation PR creation" \
+  --secret-string '{"token":"YOUR_GITHUB_TOKEN_HERE"}' \
   --region us-east-1
 ```
 
@@ -217,6 +219,9 @@ enable_k8s_readonly_enrichment = true
 # ─── Notifications ────────────────────────────────────────────────────────────
 
 slack_webhook_url = ""   # optional — leave empty if you don't have Slack
+alarm_email      = ""    # optional — confirm the AWS email subscription after apply
+monthly_budget_usd      = 200
+auto_apply_max_per_hour = 3
 
 # ─── Webhook security ─────────────────────────────────────────────────────────
 
@@ -258,8 +263,11 @@ helm repo update
 ```bash
 cd terraform
 
-# Initialise Terraform (downloads providers and modules)
-terraform init
+# Review terraform/backend.tf first if you are using a different AWS account.
+# The repo now defaults to an S3 remote backend with native lockfile locking.
+
+# Initialise Terraform (downloads providers and modules and configures backend)
+terraform init -reconfigure
 
 # Preview what will be created
 terraform plan
@@ -277,6 +285,8 @@ cluster_endpoint        = "https://XXXX.gr7.us-east-1.eks.amazonaws.com"
 cluster_name            = "gitops-auto-remediation-cluster"
 decision_engine_lambda  = "gitops-auto-remediation-decision-engine"
 event_bus_name          = "gitops-auto-remediation-bus"
+alarms_topic_arn        = "arn:aws:sns:us-east-1:123456789012:gitops-auto-remediation-alarms"
+auto_apply_kill_switch  = "/gitops-auto-remediation/auto-apply-enabled"
 outcome_validator_lambda = "gitops-auto-remediation-outcome-validator"
 signal_collector_lambda = "gitops-auto-remediation-signal-collector"
 signals_bucket_name     = "gitops-auto-remediation-incidents-xxxxxxxx"
@@ -350,7 +360,7 @@ argocd repo add https://github.com/YOUR_USERNAME/gitops-auto-remediation.git --i
 > ```bash
 > argocd repo add https://github.com/YOUR_USERNAME/gitops-auto-remediation.git \
 >   --username YOUR_USERNAME \
->   --password YOUR_CLASSIC_PAT \
+>   --password YOUR_GITHUB_TOKEN \
 >   --insecure
 > ```
 
@@ -529,8 +539,8 @@ aws dynamodb scan \
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `No module named 'requests'` in Lambda logs | Local Lambda packaging did not complete successfully during `terraform apply` | Re-run `terraform apply` after confirming `python3` and `pip` are available locally; packaging is handled by `terraform/scripts/build_lambda.sh` |
-| `GitHub API error 403` in Decision Engine logs | PAT doesn't have `repo` scope | Create a new classic PAT with full `repo` scope, update Secrets Manager |
-| `GitHub API error 403` after updating PAT | Lambda has cached the old token (5-min TTL) | Force a cold start by updating any env var on the Lambda: `aws lambda update-function-configuration --function-name gitops-auto-remediation-decision-engine --environment "$(aws lambda get-function-configuration --function-name gitops-auto-remediation-decision-engine --query 'Environment' --output json \| python3 -c "import json,sys,time; e=json.load(sys.stdin); e['Variables']['CACHE_BUST']=str(time.time()); print(json.dumps(e))")"` then fire a new alert |
+| `GitHub API error 403` in Decision Engine logs | GitHub token lacks repo write permissions | Create a token with `repo` scope or equivalent app permissions, then update Secrets Manager |
+| `GitHub API error 403` after updating the token | Lambda has cached the old token (5-min TTL) | Force a cold start by updating any env var on the Lambda: `aws lambda update-function-configuration --function-name gitops-auto-remediation-decision-engine --environment "$(aws lambda get-function-configuration --function-name gitops-auto-remediation-decision-engine --query 'Environment' --output json \| python3 -c "import json,sys,time; e=json.load(sys.stdin); e['Variables']['CACHE_BUST']=str(time.time()); print(json.dumps(e))")"` then fire a new alert |
 | Argo CD app shows `ComparisonError: allowed-actions.yaml missing Resource metadata` | `allowed-actions.yaml` is a policy config file, not a Kubernetes manifest — it must not be listed as a kustomize resource | Check `gitops/policies/kustomization.yaml` — the `resources:` list should only contain `gatekeeper/constrainttemplate-deployment-bounds.yaml` and `gatekeeper/constraint-deployment-bounds.yaml`. Remove any reference to `allowed-actions.yaml` |
 | Argo CD app shows `ComparisonError` (other kustomize errors) | kustomize build fails | Run `kustomize build gitops/clusters/staging` locally to see the full error |
 | `K8sDeploymentBounds CRD not installed` on Argo CD sync | ConstraintTemplate not applied first | Run `argocd app sync demo-staging --resource templates.gatekeeper.sh:ConstraintTemplate:k8sdeploymentbounds` then full sync |

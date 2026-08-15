@@ -149,7 +149,7 @@ def _parse_llm_json(text: str) -> dict:
 
 
 _REMEDIATION_SCHEMA = """{
-  "action":       "<chosen action from allowed_actions>",
+  "action":       "<chosen action from allowed_actions, or no_action when no incident is present>",
   "params":       {},
   "target":       {"service": "<string>", "env": "<string>"},
   "reasoning":    "<step-by-step reasoning for this choice>",
@@ -194,6 +194,10 @@ Incident context (JSON):
 
 Rules:
 - Only choose from the allowed_actions list
+- If the evidence shows no real incident or no safe change is warranted, choose "no_action"
+- For scale_replicas, params must contain {{"replicas": <integer>}}
+- For rollback_image, params must contain {{"tag": "<allowed image tag>"}}
+- For tune_resources, params may contain {{"cpu": "<quantity>", "memory": "<quantity>"}}
 - Prefer the least disruptive action that addresses the root cause
 - Explain your reasoning step by step
 
@@ -203,7 +207,19 @@ Respond with valid JSON only matching this schema:
     try:
         text   = _call_llm(prompt)
         result = _parse_llm_json(text)
-        if result.get("action") not in allowed_actions:
+        proposed_action = str(result.get("action", "")).strip().lower()
+        if proposed_action in {"none", "no_action"}:
+            # A verified false positive must never be converted into a
+            # mutating fallback action merely because it is not a GitOps action.
+            result["action"] = "no_action"
+            result.setdefault("params", {})
+            result.setdefault("target", {
+                "service": bundle.get("service", "unknown"),
+                "env": bundle.get("env", "staging"),
+            })
+            result.setdefault("reasoning", "No remediation is warranted by the available evidence.")
+            result.setdefault("alternatives", [])
+        elif proposed_action not in allowed_actions:
             raise ValueError(f"Proposed action '{result.get('action')}' not in allowed list")
         for field in ("action", "params", "target", "reasoning"):
             if field not in result:

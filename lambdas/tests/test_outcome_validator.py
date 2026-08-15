@@ -1,4 +1,5 @@
 """Unit tests for outcome_validator/app.py"""
+import base64
 import json
 import os
 import sys
@@ -88,6 +89,16 @@ class TestExtractIncidentId(unittest.TestCase):
 
     def test_returns_unknown_when_missing(self):
         self.assertEqual(app._extract_incident_id({}), "unknown")
+
+
+class TestFindRemediationPR(unittest.TestCase):
+    def test_excludes_newer_revert_pr_for_same_incident(self):
+        with patch.object(app, "_gh", return_value={"items": [
+            {"number": 11, "title": "Revert remediation for inc-1", "created_at": "2026-08-15T12:40:00Z"},
+            {"number": 10, "title": "inc-1: scale_replicas", "created_at": "2026-08-15T12:35:00Z"},
+        ]}):
+            result = app._find_ai_pr_for_incident("token", "inc-1")
+        self.assertEqual(result["number"], 10)
 
 
 class TestPromQuery(unittest.TestCase):
@@ -232,6 +243,39 @@ class TestAutoRevert(unittest.TestCase):
         # Slack message should contain the revert PR URL
         slack_msg = mock_slack.call_args[0][0]
         self.assertIn("https://github.com/org/repo/pull/99", slack_msg)
+
+    def test_revert_restores_file_from_original_pr_base_sha(self):
+        app.GITHUB_OWNER = "org"
+        app.GITHUB_REPO = "repo"
+        original = base64.b64encode(b"replicas: 3\n").decode()
+        current = base64.b64encode(b"replicas: 4\n").decode()
+
+        with (
+            patch.object(app, "_find_ai_pr_for_incident", return_value={"number": 10}),
+            patch.object(app, "_gh", return_value={
+                "base": {"ref": "main", "sha": "pre-remediation-sha"}
+            }),
+            patch.object(app, "_get_ref_sha", return_value="current-main-sha"),
+            patch.object(app, "_create_branch"),
+            patch.object(app, "_get_pr_files", return_value=[{
+                "filename": "staging/kustomization.yaml", "status": "modified"
+            }]),
+            patch.object(app, "_get_file", side_effect=[
+                {"content": original, "sha": "old-sha"},
+                {"content": current, "sha": "current-sha"},
+            ]) as mock_get_file,
+            patch.object(app, "_put_file") as mock_put_file,
+            patch.object(app, "_find_open_pr_for_branch", return_value={
+                "number": 11, "html_url": "https://github.com/org/repo/pull/11"
+            }),
+        ):
+            result = app._auto_revert("token", "inc-1")
+
+        self.assertEqual(mock_get_file.call_args_list[0], call(
+            "token", "staging/kustomization.yaml", "pre-remediation-sha"
+        ))
+        self.assertEqual(mock_put_file.call_args.args[3], b"replicas: 3\n")
+        self.assertEqual(result["revert_pr_number"], 11)
 
 
 if __name__ == "__main__":

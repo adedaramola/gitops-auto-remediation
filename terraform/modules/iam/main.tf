@@ -123,7 +123,7 @@ locals {
     local.bedrock_is_inference_profile ? [
       "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.bedrock_model_id}",
       "arn:aws:bedrock:*::foundation-model/${local.bedrock_foundation_model_id}",
-    ] : [
+      ] : [
       "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.bedrock_model_id}"
     ]
   ) : []

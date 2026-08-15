@@ -47,6 +47,8 @@ Every remediation is a Git commit. The cluster never changes outside of a GitOps
 - Deduplicates alert storms: a 30-minute dedup window prevents the same incident from triggering multiple pipelines
 - Validates every remediation: Prometheus health check 5 minutes post-merge; auto-reverts on failure
 - Full audit trail: every decision, confidence score, and outcome written to DynamoDB (90-day retention)
+- Auto-apply is guarded twice: an SSM kill switch can disable merges in ~30 seconds, and an hourly merge budget throttles risky bursts
+- Built-in alarm fanout: CloudWatch pipeline alarms and the monthly AWS budget both notify a dedicated SNS topic
 - Two LLM providers supported: AWS Bedrock (Claude 3 Haiku) and OpenAI GPT-4 — switchable via config
 - Two execution paths: a fast single-agent path for cost-sensitive environments and a full multi-agent pipeline for higher-quality decisions
 
@@ -111,7 +113,7 @@ Alertmanager / CloudWatch
 
 4. **Confidence routing** — The Confidence Scorer produces a deterministic score (no LLM call, no latency) by starting from the diagnosis confidence and applying penalties for severity, blast radius, and action risk type. The score determines the route: `auto_apply`, `open_pr`, or `escalate`.
 
-5. **GitOps write** — The Decision Engine opens a PR against the GitOps repo, updating `gitops/apps/{service}/overlays/{env}/kustomization.yaml` for replica scaling or `gitops/apps/{service}/base/deployment.yaml` for rollout and resource changes. The safe demo flow continues after a human merges that PR.
+5. **GitOps write** — The Decision Engine opens a PR against the GitOps repo, updating `gitops/apps/{service}/overlays/{env}/kustomization.yaml` for replica scaling or `gitops/apps/{service}/base/deployment.yaml` for rollout and resource changes. On the `auto_apply` route it immediately attempts a merge, but only if the SSM kill switch is enabled and the hourly merge budget is still available; otherwise the PR stays open for review.
 
 6. **Cluster sync** — Argo CD detects the merged commit and applies the change to the cluster. The cluster never changes outside of Git.
 
@@ -138,7 +140,7 @@ For the MVP demo, focus on one end-to-end story:
 1. Trigger a `HighHTTP5xxErrorRate` alert for `demo-service`
 2. Show Signal Collector writing the enriched incident bundle to S3
 3. Show the GitHub PR against the GitOps repo
-4. Merge the PR and let Argo CD sync it
+4. Merge the PR, or show the auto-merge guardrails allowing it, and let Argo CD sync it
 5. Show the GitHub Actions handoff that emits `ActionDispatched`
 6. Show Outcome Validator reporting `OutcomeValidated` or `OutcomeFailed`
 7. If preflight confirms model access, optionally show the multi-agent Step Functions execution as an advanced path
@@ -175,15 +177,18 @@ This is a portfolio project. Here's an honest account of what's built:
 - All 7 Lambda functions — Signal Collector, Decision Engine, Outcome Validator, Classifier Agent, Root Cause Agent, Action Planner, Confidence Scorer
 - Full Step Functions state machine with retry and fallback logic
 - GitHub PR automation: branch creation, commit, PR open, idempotency checks
+- Auto-apply guardrails: SSM kill switch + hourly rate limit on merges
 - Outcome validation with automatic revert PR
 - DynamoDB deduplication and audit logging
+- Pipeline alarms topic, Lambda/Step Functions failure alarms, and monthly AWS budget notifications
 - HMAC webhook validation
-- 123 unit tests across all 7 functions
+- 154 tests across the Lambda and pipeline components
 - 20 Terraform modules provisioning the full stack
+- Remote Terraform state via S3 backend with native lockfile-based locking
 
 **Intentional scope decisions**
 - The `enable_multi_agent = false` default skips confidence scoring — suitable for demos, not production
-- OPA/Gatekeeper is deployed but no ConstraintTemplate resources are defined out of the box; the `policy-check.yaml` CI step handles PR-time enforcement
+- Gatekeeper ConstraintTemplate + Constraint manifests are included, but the `policy-check.yaml` CI step remains the most reliable PR-time enforcement layer
 - Terraform packages Lambda deploy artifacts directly from `lambdas/` using a local build step, so the machine running `terraform apply` needs `python3` and `pip`
 - Service name resolution derives from Alertmanager labels; alerts missing `service` or `namespace` labels fall back to `unknown`
 - No webhook rate limiting beyond API Gateway defaults
@@ -216,7 +221,9 @@ What not to overclaim in the demo:
 
 ## What's Next
 
-_Coming soon._
+- Expand webhook-side rate limiting and schema validation beyond API Gateway defaults
+- Replace long-lived GitHub tokens with a first-class GitHub App installation-token flow in the setup guides
+- Add broader end-to-end incident coverage beyond the polished `HighHTTP5xxErrorRate` demo path
 
 ---
 
