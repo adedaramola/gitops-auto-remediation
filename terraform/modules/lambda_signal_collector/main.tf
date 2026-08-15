@@ -2,7 +2,6 @@ variable "project_name" { type = string }
 variable "role_arn" { type = string }
 variable "incident_bucket_name" { type = string }
 variable "event_bus_name" { type = string }
-variable "aws_region" { type = string }
 variable "cluster_name" { type = string }
 variable "prometheus_query_url" { type = string }
 variable "enable_k8s_readonly_enrichment" { type = bool }
