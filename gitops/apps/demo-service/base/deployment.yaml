@@ -9,21 +9,23 @@ spec:
       app: demo-service
   template:
     metadata:
+      annotations:
+        gitops.sentinel/incident-id: inc-1786795864-91811809
       labels:
         app: demo-service
     spec:
       containers:
-        - name: demo-service
-          image: kennethreitz/httpbin:latest
-          ports:
-            - containerPort: 80
-          env:
-            - name: FEATURE_FLAG_X
-              value: "false"
-          resources:
-            requests:
-              cpu: "100m"
-              memory: "128Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
+      - env:
+        - name: FEATURE_FLAG_X
+          value: 'false'
+        image: kennethreitz/httpbin:previous
+        name: demo-service
+        ports:
+        - containerPort: 80
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
